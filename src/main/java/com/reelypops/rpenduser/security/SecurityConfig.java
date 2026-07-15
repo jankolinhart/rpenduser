@@ -3,6 +3,8 @@ package com.reelypops.rpenduser.security;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -14,6 +16,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
  * Resource-server security: every request under {@code /enduser/v1/**} (except the health probe) must carry a
@@ -28,7 +31,28 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /**
+     * Internal service-to-service chain: {@code /enduser/v1/internal/**} is authenticated by the shared
+     * {@code X-Internal-Api-Key} (no end-user JWT, no channel-affinity check), so the rpadminserver BFF can
+     * read the device registry east-west for the admin console. A missing or wrong key yields {@code 401}.
+     */
     @Bean
+    @Order(1)
+    SecurityFilterChain internalApiChain(HttpSecurity http,
+                                         @Value("${rp.internal.api-key:}") String apiKey) throws Exception {
+        http
+            .securityMatcher("/enduser/v1/internal/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("INTERNAL"))
+            .exceptionHandling(e -> e.authenticationEntryPoint(
+                (req, res, ex) -> res.setStatus(HttpStatus.UNAUTHORIZED.value())))
+            .addFilterBefore(new InternalApiKeyFilter(apiKey), UsernamePasswordAuthenticationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     SecurityFilterChain filterChain(HttpSecurity http,
                                     JwtDecoder jwtDecoder,
                                     @Value("${rp.stage:prod}") String stage) throws Exception {

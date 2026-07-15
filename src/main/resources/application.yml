@@ -30,6 +30,8 @@ management:
 
 rp:
   stage: ${RP_STAGE:prod}
+  internal:
+    api-key: ${INTERNAL_API_KEY:}
 
 logging:
   level:
