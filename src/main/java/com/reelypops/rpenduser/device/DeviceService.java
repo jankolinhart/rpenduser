@@ -34,6 +34,12 @@ public class DeviceService {
         return devices.findByUserIdOrderByLastSeenAtDesc(userId);
     }
 
+    /** Per-user device counts for the admin dashboard (internal surface). */
+    @Transactional(readOnly = true)
+    public List<DeviceCount> counts() {
+        return devices.countByUser();
+    }
+
     @Transactional
     public boolean remove(UUID userId, String deviceId) {
         return devices.deleteByUserIdAndDeviceId(userId, deviceId) > 0;
