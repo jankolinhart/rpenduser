@@ -38,6 +38,17 @@ class InternalDeviceControllerTest {
                 .content("{\"deviceId\":\"" + deviceId + "\",\"platform\":\"" + platform + "\"}"));
     }
 
+    private ResultActions heartbeat(UUID user, String deviceId, boolean online, String stateHash) throws Exception {
+        return mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/heartbeat", user).header(KEY_HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"deviceId\":\"" + deviceId + "\",\"online\":" + online + ",\"stateHash\":\"" + stateHash + "\"}"));
+    }
+
+    private ResultActions report(UUID user, String body) throws Exception {
+        return mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/report", user).header(KEY_HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
     @Test
     void registersADeviceForTheUserAndReturnsItsFields() throws Exception {
         register(UUID.randomUUID(), "bff-d1", "macOS 14.5")
@@ -74,5 +85,53 @@ class InternalDeviceControllerTest {
                         .header(KEY_HEADER, "not-the-key")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"deviceId\":\"x\"}"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ── M5.1 backward contract ────────────────────────────────────────────────
+
+    @Test
+    void heartbeatCreatesTheDeviceAndAsksForAReportTheFirstTime() throws Exception {
+        heartbeat(UUID.randomUUID(), "hb-new", true, "hash-1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reportNeeded").value(true)); // no stored report yet → send one
+    }
+
+    @Test
+    void reportStoresTheSnapshotSoASubsequentMatchingHeartbeatIsQuiet() throws Exception {
+        UUID user = UUID.randomUUID();
+        // A report for a device the registry has not seen yet still lands (idempotent upsert), stored verbatim.
+        report(user, "{\"schemaVersion\":1,\"deviceId\":\"hb-rpt\",\"stateHash\":\"hash-1\","
+                + "\"session\":{\"online\":true},\"supportGroups\":[{\"sgId\":\"s1\",\"autoLiking\":true}]}")
+                .andExpect(status().isAccepted());
+
+        // Same hash as the stored report → no fresh report needed.
+        heartbeat(user, "hb-rpt", true, "hash-1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reportNeeded").value(false));
+
+        // The client's state moved on (new hash) → the backend asks for a fresh report.
+        heartbeat(user, "hb-rpt", false, "hash-2")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reportNeeded").value(true));
+    }
+
+    @Test
+    void reportWithoutADeviceIdIsBadRequest() throws Exception {
+        report(UUID.randomUUID(), "{\"schemaVersion\":1,\"stateHash\":\"hash-1\"}")
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void reportWithoutAStateHashIsBadRequest() throws Exception {
+        report(UUID.randomUUID(), "{\"schemaVersion\":1,\"deviceId\":\"hb-x\"}")
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void heartbeatWithABlankDeviceIdIsBadRequest() throws Exception {
+        mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/heartbeat", UUID.randomUUID())
+                        .header(KEY_HEADER, KEY).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"\",\"online\":true,\"stateHash\":\"h\"}"))
+                .andExpect(status().isBadRequest());
     }
 }
