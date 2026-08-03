@@ -46,8 +46,9 @@ public class InternalDeviceController {
     @PostMapping("/users/{userId}/devices/heartbeat")
     public HeartbeatResponse heartbeat(@PathVariable UUID userId, @Valid @RequestBody HeartbeatRequest req) {
         boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash());
-        return new HeartbeatResponse(reportNeeded, clientVersion.updateAvailable(req.appVersion()),
-                clientVersion.latestVersion());
+        boolean updateAvailable = clientVersion.updateAvailable(req.appVersion());
+        return new HeartbeatResponse(reportNeeded, updateAvailable, clientVersion.latestVersion(),
+                updateAvailable ? clientVersion.announcement() : null);
     }
 
     /**

@@ -1,27 +1,36 @@
 package com.reelypops.rpenduser.device;
 
+import com.reelypops.rpenduser.release.ClientReleaseService;
+import com.reelypops.rpenduser.release.ReleaseAnnouncement;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * M5.3c: decides whether a heartbeating client is behind the latest desktop client ON ITS OWN CHANNEL. Each stage
- * advertises only its channel's latest via {@code rp.client.latest-version} (DEV {@code x.x.x-SNAPSHOT.<sha>} / TEST
- * {@code x.x.x-rc.<sha>} / PROD clean {@code x.x.x}), set per stage via the IaC — blank ⇒ nothing is ever flagged.
- * The verdict is CHANNEL-aware: a DEV or TEST build is NEVER offered to a PROD client (and vice-versa). It is a soft,
- * non-blocking "update available" hint (no forced-update gate).
+ * M5.3c: decides whether a heartbeating client is behind the latest desktop client ON ITS OWN CHANNEL. The "latest"
+ * is the admin-ANNOUNCED version held in the client-release state ({@link ClientReleaseService}) — the version the
+ * admin gate has deliberately published to the fleet — falling back to the {@code rp.client.latest-version} floor
+ * (a bootstrap/override; DEV {@code x.x.x-SNAPSHOT.<sha>} / TEST {@code x.x.x-rc.<sha>} / PROD clean {@code x.x.x}).
+ * Blank ⇒ nothing is ever flagged. The verdict is CHANNEL-aware: a DEV or TEST build is NEVER offered to a PROD
+ * client (and vice-versa). It is a soft, non-blocking "update available" hint (no forced-update gate).
  */
 @Service
 public class ClientVersionService {
 
-    private final String latestVersion;
+    private final String envFloor;
+    private final ClientReleaseService releases;
 
-    public ClientVersionService(@Value("${rp.client.latest-version:}") String latestVersion) {
-        this.latestVersion = latestVersion == null ? "" : latestVersion.trim();
+    public ClientVersionService(@Value("${rp.client.latest-version:}") String envFloor, ClientReleaseService releases) {
+        this.envFloor = envFloor == null ? "" : envFloor.trim();
+        this.releases = releases;
     }
 
-    /** The configured latest client version, echoed to the client so it can show "update to X" (blank when unset). */
+    /**
+     * The effective latest client version echoed to the client — the admin-ANNOUNCED version if there is one, else the
+     * {@code rp.client.latest-version} floor (blank when neither is set).
+     */
     public String latestVersion() {
-        return latestVersion;
+        String announced = releases.announcedVersion();
+        return announced != null && !announced.isBlank() ? announced.trim() : envFloor;
     }
 
     /**
@@ -33,10 +42,16 @@ public class ClientVersionService {
      * when either version is blank.
      */
     public boolean updateAvailable(String clientVersion) {
-        if (latestVersion.isBlank() || clientVersion == null || clientVersion.isBlank()) {
+        String latest = latestVersion();
+        if (latest.isBlank() || clientVersion == null || clientVersion.isBlank()) {
             return false;
         }
-        return isBehind(clientVersion.trim(), latestVersion);
+        return isBehind(clientVersion.trim(), latest);
+    }
+
+    /** The public announcement payload (urgency + curated blurb) for the announced version, or {@code null} when none. */
+    public ReleaseAnnouncement announcement() {
+        return releases.announcement();
     }
 
     /** Whether {@code client} is behind {@code latest} on the SAME channel (see {@link #updateAvailable}). */
