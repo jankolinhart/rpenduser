@@ -60,6 +60,15 @@ class AdminClientReleaseControllerTest {
     }
 
     @Test
+    void pushingAPublishedVersionMakesItPendingUnderTheGate() throws Exception {
+        mockMvc.perform(post(BASE + "/published").header(KEY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"version\":\"0.6.0\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publishedVersion").value("0.6.0"))
+                .andExpect(jsonPath("$.pendingAnnouncement").value(true));   // gate on (DEV default) → awaiting announce
+    }
+
+    @Test
     void aPublishedVersionShowsAsPendingThenAnnounces() throws Exception {
         releases.updatePublishedVersion("0.4.0");   // gate on (DEV default) → pending, not yet announced
 
