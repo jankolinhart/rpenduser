@@ -7,9 +7,10 @@ import org.springframework.web.client.RestClient;
 
 /**
  * rpenduser's first east-west OUTBOUND client (M5 re-vet consumer): forwards one client-reported drift observation to
- * rpsupportgroup's internal drift-ingest endpoint, authenticated by the shared {@code X-Internal-Api-Key} (the same
- * key rpenduser accepts on its own internal surface). A non-2xx surfaces as the RestClient default
- * {@code RestClientResponseException}; the caller ({@link DriftForwardingService}) forwards best-effort.
+ * rpsupportgroup's internal drift-ingest endpoint, authenticated with rpsupportgroup's OWN internal API key
+ * ({@code X-Internal-Api-Key}) — each service owns a distinct internal key, so the caller presents the TARGET's key,
+ * not its own. A non-2xx surfaces as the RestClient default {@code RestClientResponseException}; the caller
+ * ({@link DriftForwardingService}) forwards best-effort.
  */
 @Component
 public class SupportGroupDriftClient {
@@ -21,7 +22,7 @@ public class SupportGroupDriftClient {
 
     public SupportGroupDriftClient(RestClient.Builder builder,
                                    @Value("${rp.supportgroup.base-url:}") String baseUrl,
-                                   @Value("${rp.internal.api-key:}") String apiKey) {
+                                   @Value("${rp.supportgroup.api-key:}") String apiKey) {
         this.restClient = builder
                 .baseUrl(baseUrl)
                 .defaultHeader(API_KEY_HEADER, apiKey)
