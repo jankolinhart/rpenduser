@@ -1,14 +1,22 @@
 package com.reelypops.rpenduser.device;
 
+import com.reelypops.rpenduser.release.ClientReleaseService;
+import com.reelypops.rpenduser.release.ReleaseAnnouncement;
+import com.reelypops.rpenduser.release.UpdateUrgency;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Unit coverage for the M5.3c client-version comparison (the soft "update available" verdict + all parse branches). */
 class ClientVersionServiceTest {
 
+    /** A service whose "latest" comes only from the rp.client.latest-version floor (no admin-announced version). */
     private static ClientVersionService withLatest(String latest) {
-        return new ClientVersionService(latest);
+        return new ClientVersionService(latest, mock(ClientReleaseService.class));
     }
 
     @Test
@@ -87,5 +95,32 @@ class ClientVersionServiceTest {
     void nonNumericOrShortPartsAreParsedLeniently() {
         assertThat(withLatest("0.2.0").updateAvailable("0.x.0")).isTrue();  // 'x' → 0, so 0.0.0 < 0.2.0 (both release)
         assertThat(withLatest("0.0.1").updateAvailable("0")).isTrue();      // '0' → 0.0.0 < 0.0.1 (both release)
+    }
+
+    // --- M5.3c: the admin-ANNOUNCED version is the source of "latest" (the env value is only a fallback floor) ---
+
+    @Test
+    void announcedVersionOverridesTheEnvFloor() {
+        ClientReleaseService releases = mock(ClientReleaseService.class);
+        when(releases.announcedVersion()).thenReturn("0.4.0");
+        ClientVersionService svc = new ClientVersionService("0.1.0", releases);  // the 0.1.0 floor is ignored
+        assertThat(svc.latestVersion()).isEqualTo("0.4.0");
+        assertThat(svc.updateAvailable("0.3.0")).isTrue();   // behind the announced version
+        assertThat(svc.updateAvailable("0.4.0")).isFalse();  // up to date with it
+    }
+
+    @Test
+    void blankAnnouncedFallsBackToTheEnvFloor() {
+        ClientReleaseService releases = mock(ClientReleaseService.class);
+        when(releases.announcedVersion()).thenReturn("   ");
+        assertThat(new ClientVersionService("0.5.0", releases).latestVersion()).isEqualTo("0.5.0");
+    }
+
+    @Test
+    void announcementIsPassedThroughFromTheReleaseState() {
+        ClientReleaseService releases = mock(ClientReleaseService.class);
+        ReleaseAnnouncement ann = new ReleaseAnnouncement("0.4.0", UpdateUrgency.URGENT, List.of("Security fixes"));
+        when(releases.announcement()).thenReturn(ann);
+        assertThat(new ClientVersionService("", releases).announcement()).isSameAs(ann);
     }
 }
