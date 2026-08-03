@@ -32,6 +32,10 @@ rp:
   stage: ${RP_STAGE:prod}
   internal:
     api-key: ${INTERNAL_API_KEY:}
+  supportgroup:
+    # M5 re-vet consumer: rpsupportgroup's internal base URL (east-west), used to forward client-reported drift[].
+    # Reuses rp.internal.api-key as the shared X-Internal-Api-Key. Blank ⇒ forwarding fails best-effort (no report impact).
+    base-url: ${RP_SUPPORTGROUP_BASE_URL:}
   client:
     # M5.3c: the latest released desktop-client version; set per stage via the IaC (rpdeploy). Blank ⇒ never flag
     # an outdated client. A heartbeat whose reported appVersion is older than this gets updateAvailable=true.

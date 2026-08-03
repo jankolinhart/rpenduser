@@ -1,6 +1,7 @@
 package com.reelypops.rpenduser.device;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.reelypops.rpenduser.drift.DriftForwardingService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,10 +28,13 @@ public class InternalDeviceController {
 
     private final DeviceService devices;
     private final ClientVersionService clientVersion;
+    private final DriftForwardingService driftForwarding;
 
-    public InternalDeviceController(DeviceService devices, ClientVersionService clientVersion) {
+    public InternalDeviceController(DeviceService devices, ClientVersionService clientVersion,
+                                    DriftForwardingService driftForwarding) {
         this.devices = devices;
         this.clientVersion = clientVersion;
+        this.driftForwarding = driftForwarding;
     }
 
     @PostMapping("/users/{userId}/devices")
@@ -48,7 +52,8 @@ public class InternalDeviceController {
 
     /**
      * M5.1 report — store the full backward-contract snapshot verbatim (ignore-unknown/additive). The body carries
-     * its own {@code deviceId} + {@code stateHash}; a body missing either is a 400.
+     * its own {@code deviceId} + {@code stateHash}; a body missing either is a 400. M5 re-vet consumer: after storing,
+     * the report's {@code drift[]} is parsed + forwarded to rpsupportgroup (best-effort, never fails the report).
      */
     @PostMapping("/users/{userId}/devices/report")
     public ResponseEntity<Void> report(@PathVariable UUID userId, @RequestBody JsonNode body) {
@@ -58,6 +63,7 @@ public class InternalDeviceController {
             return ResponseEntity.badRequest().build();
         }
         devices.applyReport(userId, deviceId, body.toString(), stateHash);
+        driftForwarding.forward(userId, deviceId, body);
         return ResponseEntity.accepted().build();
     }
 
