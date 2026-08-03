@@ -37,28 +37,55 @@ class ClientVersionServiceTest {
         assertThat(svc.updateAvailable("   ")).isFalse();
     }
 
+    // --- PROD / RELEASE channel: strictly version-number driven ---
+
     @Test
-    void olderClientFlagsAcrossEachComponent() {
+    void releaseChannelFlagsAStrictlyNewerVersion() {
         assertThat(withLatest("0.3.0").updateAvailable("0.2.0")).isTrue();   // minor behind
         assertThat(withLatest("2.0.0").updateAvailable("1.9.9")).isTrue();   // major behind
         assertThat(withLatest("0.2.1").updateAvailable("0.2.0")).isTrue();   // patch behind
     }
 
     @Test
-    void sameOrNewerClientDoesNotFlag() {
+    void releaseChannelDoesNotFlagWhenEqualOrAhead() {
         assertThat(withLatest("0.3.0").updateAvailable("0.3.0")).isFalse();  // equal
-        assertThat(withLatest("0.3.0").updateAvailable("0.4.0")).isFalse();  // ahead
+        assertThat(withLatest("0.3.0").updateAvailable("0.4.0")).isFalse();  // client ahead
+    }
+
+    // --- DEV / SNAPSHOT + TEST / RC channels: the sha distinguishes builds of the same core ---
+
+    @Test
+    void snapshotChannelFlagsADifferentBuildOfTheSameCore() {
+        assertThat(withLatest("0.2.0-SNAPSHOT.def5678").updateAvailable("0.2.0-SNAPSHOT.abc1234")).isTrue();  // new sha
+        assertThat(withLatest("0.2.0-SNAPSHOT.abc1234").updateAvailable("0.2.0-SNAPSHOT.abc1234")).isFalse(); // same build
+        assertThat(withLatest("0.3.0-SNAPSHOT.aaa").updateAvailable("0.2.0-SNAPSHOT.bbb")).isTrue();          // newer core
     }
 
     @Test
-    void preReleaseIsOlderThanItsRelease() {
-        assertThat(withLatest("0.2.0").updateAvailable("0.2.0-SNAPSHOT")).isTrue();  // snapshot < release
-        assertThat(withLatest("0.2.0-SNAPSHOT").updateAvailable("0.2.0")).isFalse(); // release not < its snapshot
+    void rcChannelFlagsADifferentBuildOfTheSameCore() {
+        assertThat(withLatest("0.2.0-rc.def5678").updateAvailable("0.2.0-rc.abc1234")).isTrue();   // new sha
+        assertThat(withLatest("0.2.0-rc.abc1234").updateAvailable("0.2.0-rc.abc1234")).isFalse();  // same build
+        assertThat(withLatest("0.2.0-rc.aaa").updateAvailable("0.3.0-rc.bbb")).isFalse();          // client core ahead
+    }
+
+    // --- CROSS-CHANNEL: a DEV/TEST build is NEVER offered to a PROD client (and vice-versa) ---
+
+    @Test
+    void neverOffersAcrossChannels() {
+        // a PROD (release) client is only ever offered a release
+        assertThat(withLatest("0.3.0-SNAPSHOT.x").updateAvailable("0.2.0")).isFalse();  // release client, snapshot latest
+        assertThat(withLatest("0.3.0-rc.x").updateAvailable("0.2.0")).isFalse();        // release client, rc latest
+        // a DEV (snapshot) client is never offered a release or an rc
+        assertThat(withLatest("0.3.0").updateAvailable("0.2.0-SNAPSHOT.x")).isFalse();
+        assertThat(withLatest("0.3.0-rc.y").updateAvailable("0.2.0-SNAPSHOT.x")).isFalse();
+        // a TEST (rc) client is never offered a release or a snapshot
+        assertThat(withLatest("0.3.0").updateAvailable("0.2.0-rc.x")).isFalse();
+        assertThat(withLatest("0.3.0-SNAPSHOT.y").updateAvailable("0.2.0-rc.x")).isFalse();
     }
 
     @Test
     void nonNumericOrShortPartsAreParsedLeniently() {
-        assertThat(withLatest("0.2.0").updateAvailable("0.x.0")).isTrue();  // 'x' → 0, so 0.0.0 < 0.2.0
-        assertThat(withLatest("0.0.1").updateAvailable("0")).isTrue();      // '0' → 0.0.0 < 0.0.1
+        assertThat(withLatest("0.2.0").updateAvailable("0.x.0")).isTrue();  // 'x' → 0, so 0.0.0 < 0.2.0 (both release)
+        assertThat(withLatest("0.0.1").updateAvailable("0")).isTrue();      // '0' → 0.0.0 < 0.0.1 (both release)
     }
 }
