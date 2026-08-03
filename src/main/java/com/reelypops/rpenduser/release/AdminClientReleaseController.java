@@ -12,7 +12,8 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * Internal admin surface for the M5.3c client-release announcement gate, on {@code /enduser/v1/internal} and gated by
  * {@code X-Internal-Api-Key} — consumed east-west by the rpadminserver BFF for the admin console. Exposes the
- * pending-release status, the "Publish Announcement Now" gate action, and the DEV/TEST gate toggle.
+ * pending-release status, the published-version push (rpadminserver's S3 read), the "Publish Announcement Now" gate
+ * action, and the DEV/TEST gate toggle.
  */
 @RestController
 @RequestMapping("/enduser/v1/internal/client-release")
@@ -27,6 +28,17 @@ public class AdminClientReleaseController {
     /** The pending-release status + gate state for the admin console. */
     @GetMapping
     public PendingReleaseView status() {
+        return releases.pending();
+    }
+
+    /**
+     * Internal push of a newly-discovered, verified-downloadable version — rpadminserver reads the S3 artifact bucket
+     * (the newest COMPLETE version per channel) and pushes it here (rpenduser stays AWS-free). When the gate is off
+     * (DEV/TEST) it auto-announces; otherwise it becomes a pending release awaiting the admin gate.
+     */
+    @PostMapping("/published")
+    public PendingReleaseView published(@RequestBody PublishedRequest req) {
+        releases.updatePublishedVersion(req.version());
         return releases.pending();
     }
 
