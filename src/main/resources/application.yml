@@ -32,6 +32,10 @@ rp:
   stage: ${RP_STAGE:prod}
   internal:
     api-key: ${INTERNAL_API_KEY:}
+  client:
+    # M5.3c: the latest released desktop-client version; set per stage via the IaC (rpdeploy). Blank ⇒ never flag
+    # an outdated client. A heartbeat whose reported appVersion is older than this gets updateAvailable=true.
+    latest-version: ${RP_CLIENT_LATEST_VERSION:}
 
 logging:
   level:

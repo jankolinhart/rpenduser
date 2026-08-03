@@ -26,9 +26,11 @@ import java.util.UUID;
 public class InternalDeviceController {
 
     private final DeviceService devices;
+    private final ClientVersionService clientVersion;
 
-    public InternalDeviceController(DeviceService devices) {
+    public InternalDeviceController(DeviceService devices, ClientVersionService clientVersion) {
         this.devices = devices;
+        this.clientVersion = clientVersion;
     }
 
     @PostMapping("/users/{userId}/devices")
@@ -36,10 +38,12 @@ public class InternalDeviceController {
         return DeviceResponse.of(devices.register(userId, req.deviceId(), req.platform()));
     }
 
-    /** M5.1 heartbeat — refresh liveness + tell the client whether to send a fresh full report. */
+    /** M5.1 heartbeat — refresh liveness + tell the client whether to send a fresh full report; M5.3c — also flag an outdated client. */
     @PostMapping("/users/{userId}/devices/heartbeat")
     public HeartbeatResponse heartbeat(@PathVariable UUID userId, @Valid @RequestBody HeartbeatRequest req) {
-        return new HeartbeatResponse(devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash()));
+        boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash());
+        return new HeartbeatResponse(reportNeeded, clientVersion.updateAvailable(req.appVersion()),
+                clientVersion.latestVersion());
     }
 
     /**

@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Full-stack test of the internal device-write endpoint (key-authed, no end-user JWT) against a Testcontainers
  * Postgres — the surface the rpserver BFF calls to register a device on the signed-in user's behalf.
  */
-@SpringBootTest(properties = "rp.internal.api-key=test-internal-key")
+@SpringBootTest(properties = {"rp.internal.api-key=test-internal-key", "rp.client.latest-version=9.9.9"})
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
 class InternalDeviceControllerTest {
@@ -42,6 +42,13 @@ class InternalDeviceControllerTest {
         return mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/heartbeat", user).header(KEY_HEADER, KEY)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"deviceId\":\"" + deviceId + "\",\"online\":" + online + ",\"stateHash\":\"" + stateHash + "\"}"));
+    }
+
+    private ResultActions heartbeatWithVersion(UUID user, String deviceId, String stateHash, String appVersion) throws Exception {
+        return mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/heartbeat", user).header(KEY_HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"deviceId\":\"" + deviceId + "\",\"online\":true,\"stateHash\":\"" + stateHash
+                        + "\",\"appVersion\":\"" + appVersion + "\"}"));
     }
 
     private ResultActions report(UUID user, String body) throws Exception {
@@ -94,6 +101,22 @@ class InternalDeviceControllerTest {
         heartbeat(UUID.randomUUID(), "hb-new", true, "hash-1")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reportNeeded").value(true)); // no stored report yet → send one
+    }
+
+    @Test
+    void heartbeatFlagsAnOutdatedClient() throws Exception {
+        // The configured latest is 9.9.9 (class property); a 0.1.0 client is behind → updateAvailable + the latest echoed.
+        heartbeatWithVersion(UUID.randomUUID(), "hb-old", "hash-1", "0.1.0")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updateAvailable").value(true))
+                .andExpect(jsonPath("$.latestVersion").value("9.9.9"));
+    }
+
+    @Test
+    void heartbeatDoesNotFlagAnUpToDateClient() throws Exception {
+        heartbeatWithVersion(UUID.randomUUID(), "hb-current", "hash-1", "9.9.9")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updateAvailable").value(false));
     }
 
     @Test
