@@ -123,6 +123,50 @@ class DriftForwardingServiceTest {
         verifyNoInteractions(client);
     }
 
+    // --- ACKNOWLEDGEMENT: which drift actually landed (16/08/2026) ---
+
+    @Test
+    void ACKNOWLEDGES_onlyTheDriftThatReachedRpsupportgroup() {
+        // The whole point: a bare 202 told the client "accepted" whether or not its drift was delivered, so it
+        // stopped re-asserting and the fault sat on the client while the cloud had never heard of it.
+        doThrow(new RuntimeException("rpsupportgroup down")).when(client).reportDrift(eq("grp.two"), any());
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"grp.one"},{"sgId":2,"accountName":"grp.two"}],
+                 "drift":[{"sgId":1,"kind":"new-owner","nominatedOwnerHandle":"cand.owner"},
+                          {"sgId":2,"kind":"marker-disagree"},
+                          {"sgId":9,"kind":"marker-disagree"},
+                          {"sgId":1,"kind":"something-unknown"}]}
+                """);
+
+        var acknowledged = service.forward(USER, "dev-1", report);
+
+        // Delivered → acknowledged. Threw, unresolvable sgId, unmapped kind → NOT acknowledged, so the client
+        // keeps telling us.
+        assertThat(acknowledged).containsExactly(
+                DriftForwardingService.driftKey("new-owner", 1L, null, null, "cand.owner"));
+    }
+
+    @Test
+    void theKeyIdentifiesTheREFERENCE_notThePositionInTheArray() {
+        // Matched against the client's own stored rows, not the JSON it happened to send — an index would
+        // mis-attribute the moment the ordering changed.
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
+                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerRole":"start",
+                           "markerText":"GB AGENCY START Sonntag"}]}
+                """);
+
+        assertThat(service.forward(USER, "dev-1", report)).containsExactly(
+                DriftForwardingService.driftKey("marker-reference-corrupt", 1L, "start",
+                        "GB AGENCY START Sonntag", null));
+    }
+
+    @Test
+    void anEmptyOrAbsentDriftArrayAcknowledgesNothing() {
+        assertThat(service.forward(USER, "dev-1", json("{\"drift\":[]}"))).isEmpty();
+        assertThat(service.forward(USER, "dev-1", json("{}"))).isEmpty();
+    }
+
     // --- MEASURED drift + the picture behind it, and corrupt references (16/08/2026) ---
 
     @Test

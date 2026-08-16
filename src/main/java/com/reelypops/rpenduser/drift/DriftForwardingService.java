@@ -5,7 +5,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -27,25 +29,64 @@ public class DriftForwardingService {
         this.client = client;
     }
 
-    /** Parse the report's {@code drift[]} and forward each resolvable observation to rpsupportgroup. */
-    public void forward(UUID userId, String deviceId, JsonNode report) {
+    /**
+     * Parse the report's {@code drift[]}, forward each resolvable observation, and return the keys of those that
+     * were <strong>actually accepted by rpsupportgroup</strong>.
+     *
+     * <p>The return value is the ACKNOWLEDGEMENT. Without it the client is told "202 accepted" whether or not the
+     * drift reached its destination, and it then stops re-asserting: an unresolved fault sits on the client
+     * forever while the cloud has never heard of it. That happened live on 16/08/2026 — a corrupt reference was
+     * reported to a cloud that could not yet parse the kind, was dropped by {@link #mapKind}, and was recovered
+     * only because an operator changed an unrelated setting and moved the report fingerprint by accident.</p>
+     */
+    public List<String> forward(UUID userId, String deviceId, JsonNode report) {
         JsonNode driftArray = report.get("drift");
         if (driftArray == null || !driftArray.isArray() || driftArray.isEmpty()) {
-            return;
+            return List.of();
         }
         Map<Long, String> igBySgId = sgIdToAccount(report);
+        List<String> acknowledged = new ArrayList<>();
         for (JsonNode drift : driftArray) {
-            forwardOne(userId, deviceId, igBySgId, drift);
+            String key = forwardOne(userId, deviceId, igBySgId, drift);
+            if (key != null) {
+                acknowledged.add(key);
+            }
         }
+        return acknowledged;
     }
 
-    private void forwardOne(UUID userId, String deviceId, Map<Long, String> igBySgId, JsonNode drift) {
+    /**
+     * The identity of one drift, computed the same way on both sides so an acknowledgement can be matched back to
+     * the row that produced it: {@code kind|sgId|discriminator}.
+     *
+     * <p>Deliberately NOT the array index — the client matches this against its own stored rows, not against the
+     * JSON it happened to send, and an index would silently mis-attribute the moment the ordering changed.</p>
+     */
+    public static String driftKey(String clientKind, Long sgId, String markerRole, String markerText,
+                                  String nominatedOwnerHandle) {
+        // ⚠️ MUST stay byte-identical to the desktop client's DriftAcknowledgementService.key(...) — this string
+        // IS the contract that lets an acknowledgement find the row that produced it. A silent divergence would
+        // acknowledge nothing and the client would re-assert forever.
+        String discriminator = nominatedOwnerHandle != null && !nominatedOwnerHandle.isBlank()
+                ? nominatedOwnerHandle.trim()
+                : (safe(markerRole) + " " + safe(markerText));
+        return safe(clientKind) + "|" + (sgId == null ? "" : sgId) + "|" + discriminator;
+    }
+
+    private static String safe(String v) {
+        return v == null ? "" : v.trim();
+    }
+
+    /** Forward one observation; returns its {@link #driftKey} when rpsupportgroup accepted it, else {@code null}. */
+    private String forwardOne(UUID userId, String deviceId, Map<Long, String> igBySgId, JsonNode drift) {
         Long sgId = longField(drift, "sgId");
-        String kind = mapKind(textField(drift, "kind"));
+        String clientKind = textField(drift, "kind");
+        String kind = mapKind(clientKind);
         String igAccount = sgId == null ? null : igBySgId.get(sgId);
         if (igAccount == null || kind == null) {
-            log.debug("skipping undeliverable drift sgId={} kind={}", sgId, textField(drift, "kind"));
-            return;
+            // NOT acknowledged — the client must keep re-asserting rather than assume it landed.
+            log.debug("skipping undeliverable drift sgId={} kind={}", sgId, clientKind);
+            return null;
         }
         DriftReportRequest req = new DriftReportRequest(kind, deviceId, userId,
                 textField(drift, "nominatedOwnerHandle"), intField(drift, "agreePass"),
@@ -55,8 +96,11 @@ public class DriftForwardingService {
                 textField(drift, "evidencePostId"), binaryField(drift, "evidenceImage"));
         try {
             client.reportDrift(igAccount, req);
+            return driftKey(clientKind, sgId, textField(drift, "markerRole"), textField(drift, "markerText"),
+                    textField(drift, "nominatedOwnerHandle"));
         } catch (RuntimeException e) {
             log.warn("failed to forward {} drift for {}: {}", kind, igAccount, e.toString());
+            return null; // unacknowledged — the client re-asserts it
         }
     }
 
