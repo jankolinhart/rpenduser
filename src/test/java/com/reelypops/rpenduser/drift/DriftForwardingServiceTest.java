@@ -123,6 +123,38 @@ class DriftForwardingServiceTest {
         verifyNoInteractions(client);
     }
 
+    @Test
+    void REGRESSION_theClientSerialisesTheRoleAsMarkerType_notMarkerRole() {
+        // Reading "markerRole" returned null on EVERY observation. A null role is not inert: the cloud matches
+        // references BY role when adopting, so it matched nothing and silently left the vetted profile unchanged —
+        // a repair that appeared to work while the live banner it should have added was dropped. Live on 16/08.
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
+                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerType":"start",
+                           "markerText":"GB AGENCY START Sonntag","detail":"looks like a shortcode"}]}
+                """);
+
+        service.forward(USER, "dev-1", report);
+
+        ArgumentCaptor<DriftReportRequest> body = ArgumentCaptor.forClass(DriftReportRequest.class);
+        verify(client).reportDrift(eq("glowbloggeragency"), body.capture());
+        assertThat(body.getValue().markerRole()).isEqualTo("start");
+    }
+
+    @Test
+    void theCloudSideNameIsAcceptedAsAFallback() {
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"g"}],
+                 "drift":[{"sgId":1,"kind":"marker-image-drift","markerRole":"end","imageDistance":9}]}
+                """);
+
+        service.forward(USER, "dev-1", report);
+
+        ArgumentCaptor<DriftReportRequest> body = ArgumentCaptor.forClass(DriftReportRequest.class);
+        verify(client).reportDrift(eq("g"), body.capture());
+        assertThat(body.getValue().markerRole()).isEqualTo("end");
+    }
+
     // --- ACKNOWLEDGEMENT: which drift actually landed (16/08/2026) ---
 
     @Test
@@ -152,7 +184,7 @@ class DriftForwardingServiceTest {
         // mis-attribute the moment the ordering changed.
         JsonNode report = json("""
                 {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
-                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerRole":"start",
+                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerType":"start",
                            "markerText":"GB AGENCY START Sonntag"}]}
                 """);
 
@@ -176,7 +208,7 @@ class DriftForwardingServiceTest {
         String pictureBase64 = java.util.Base64.getEncoder().encodeToString(new byte[]{1, 2, 3, 4});
         JsonNode report = json("""
                 {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
-                 "drift":[{"sgId":1,"kind":"marker-image-drift","markerRole":"start",
+                 "drift":[{"sgId":1,"kind":"marker-image-drift","markerType":"start",
                            "markerText":"GB AGENCY START Sonntag","imageDistance":15,"imageThreshold":10,
                            "persistenceCount":2,"evidencePostId":"DcEj0SRu","evidenceImage":"%s"}]}
                 """.formatted(pictureBase64));
@@ -201,7 +233,7 @@ class DriftForwardingServiceTest {
     void forwardsACORRUPT_referenceWithTheFaultThatWasFound() {
         JsonNode report = json("""
                 {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
-                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerRole":"start",
+                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerType":"start",
                            "markerText":"GB AGENCY START Sonntag",
                            "detail":"value=DbyhP29u looks like an Instagram post shortcode"}]}
                 """);
