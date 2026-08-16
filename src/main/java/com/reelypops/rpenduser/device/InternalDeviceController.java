@@ -57,15 +57,21 @@ public class InternalDeviceController {
      * the report's {@code drift[]} is parsed + forwarded to rpsupportgroup (best-effort, never fails the report).
      */
     @PostMapping("/users/{userId}/devices/report")
-    public ResponseEntity<Void> report(@PathVariable UUID userId, @RequestBody JsonNode body) {
+    public ResponseEntity<ReportResponse> report(@PathVariable UUID userId, @RequestBody JsonNode body) {
         String deviceId = textField(body, "deviceId");
         String stateHash = textField(body, "stateHash");
         if (deviceId == null || stateHash == null) {
             return ResponseEntity.badRequest().build();
         }
         devices.applyReport(userId, deviceId, body.toString(), stateHash);
-        driftForwarding.forward(userId, deviceId, body);
-        return ResponseEntity.accepted().build();
+        // The response now ACKNOWLEDGES the drift that actually reached rpsupportgroup. A bare 202 told the client
+        // "accepted" whether or not its drift was delivered, and the client then stopped re-asserting — so a fault
+        // it had reported could sit on it forever while the cloud had never heard of it.
+        return ResponseEntity.accepted().body(new ReportResponse(driftForwarding.forward(userId, deviceId, body)));
+    }
+
+    /** The report verdict: which drift observations rpsupportgroup accepted, keyed as {@code kind|sgId|discriminator}. */
+    public record ReportResponse(java.util.List<String> acknowledgedDrift) {
     }
 
     /** A non-blank textual field of {@code body}, or {@code null} when absent/blank/non-textual. */
