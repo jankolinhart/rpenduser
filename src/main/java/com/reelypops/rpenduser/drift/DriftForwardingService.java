@@ -49,7 +49,10 @@ public class DriftForwardingService {
         }
         DriftReportRequest req = new DriftReportRequest(kind, deviceId, userId,
                 textField(drift, "nominatedOwnerHandle"), intField(drift, "agreePass"),
-                intField(drift, "disagreePass"), intField(drift, "persistenceCount"));
+                intField(drift, "disagreePass"), intField(drift, "persistenceCount"),
+                textField(drift, "markerRole"), textField(drift, "markerText"), textField(drift, "detail"),
+                intField(drift, "imageDistance"), intField(drift, "imageThreshold"),
+                textField(drift, "evidencePostId"), binaryField(drift, "evidenceImage"));
         try {
             client.reportDrift(igAccount, req);
         } catch (RuntimeException e) {
@@ -73,7 +76,15 @@ public class DriftForwardingService {
         return map;
     }
 
-    /** Map the client drift kind onto the rpsupportgroup {@code DriftKind} name, or {@code null} when unrecognised. */
+    /**
+     * Map the client drift kind onto the rpsupportgroup {@code DriftKind} name, or {@code null} when unrecognised.
+     *
+     * <p>⚠️ <strong>An unmapped kind is DROPPED here, silently.</strong> That is deliberate — rpenduser must not
+     * forward a kind rpsupportgroup would reject — but it means this switch is a place a whole feature can go
+     * missing: {@code marker-image-drift} was measured, retained and reported by the client, and fell into
+     * {@code default -> null} on the way through, so no measurement ever reached rpsupportgroup. Any new client
+     * drift kind must be added here as well as at both ends.</p>
+     */
     private static String mapKind(String clientKind) {
         if (clientKind == null) {
             return null;
@@ -81,6 +92,8 @@ public class DriftForwardingService {
         return switch (clientKind) {
             case "marker-disagree" -> "MARKER_DISAGREE";
             case "new-owner" -> "NEW_OWNER";
+            case "marker-image-drift" -> "MARKER_IMAGE_DRIFT";
+            case "marker-reference-corrupt" -> "MARKER_REFERENCE_CORRUPT";
             default -> null;
         };
     }
@@ -98,5 +111,27 @@ public class DriftForwardingService {
     private static Integer intField(JsonNode node, String field) {
         JsonNode value = node.get(field);
         return value != null && value.canConvertToInt() ? value.asInt() : null;
+    }
+
+    /**
+     * A base64 picture from the client's report, passed through untouched.
+     *
+     * <p>Never re-encoded: the hash the cloud computes from these bytes is compared against LIVE images by every
+     * client, and a re-compression would move it. The bytes forwarded are the exact bytes the client hashed.</p>
+     */
+    private static byte[] binaryField(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isTextual() || value.asText().isBlank()) {
+            return null;
+        }
+        try {
+            byte[] bytes = value.binaryValue();
+            return bytes == null || bytes.length == 0 ? null : bytes;
+        } catch (java.io.IOException e) {
+            // Not decodable base64. The MEASUREMENT is still worth delivering — an administrator told "this banner
+            // moved 15 bits" without a picture is far better off than one told nothing at all.
+            log.warn("drift evidence image was not decodable base64 — forwarding the measurement without it");
+            return null;
+        }
     }
 }

@@ -123,6 +123,85 @@ class DriftForwardingServiceTest {
         verifyNoInteractions(client);
     }
 
+    // --- MEASURED drift + the picture behind it, and corrupt references (16/08/2026) ---
+
+    @Test
+    void REGRESSION_forwardsAMEASURED_imageDriftWithItsPicture() {
+        // ⚠️ This kind used to fall into `default -> null` and be DROPPED here. The client measured the drift,
+        // retained the picture and reported it — and nothing ever reached rpsupportgroup.
+        String pictureBase64 = java.util.Base64.getEncoder().encodeToString(new byte[]{1, 2, 3, 4});
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
+                 "drift":[{"sgId":1,"kind":"marker-image-drift","markerRole":"start",
+                           "markerText":"GB AGENCY START Sonntag","imageDistance":15,"imageThreshold":10,
+                           "persistenceCount":2,"evidencePostId":"DcEj0SRu","evidenceImage":"%s"}]}
+                """.formatted(pictureBase64));
+
+        service.forward(USER, "dev-1", report);
+
+        ArgumentCaptor<DriftReportRequest> body = ArgumentCaptor.forClass(DriftReportRequest.class);
+        verify(client).reportDrift(eq("glowbloggeragency"), body.capture());
+        DriftReportRequest req = body.getValue();
+        assertThat(req.kind()).isEqualTo("MARKER_IMAGE_DRIFT");
+        assertThat(req.markerRole()).isEqualTo("start");
+        assertThat(req.markerText()).isEqualTo("GB AGENCY START Sonntag"); // names the ONE reference, not the role
+        assertThat(req.imageDistance()).isEqualTo(15);
+        assertThat(req.imageThreshold()).isEqualTo(10);
+        assertThat(req.evidencePostId()).isEqualTo("DcEj0SRu");
+        // Passed through byte-for-byte: the cloud hashes exactly what the client hashed, so a re-encode here would
+        // move the hash and defeat the adoption.
+        assertThat(req.evidenceImage()).containsExactly(1, 2, 3, 4);
+    }
+
+    @Test
+    void forwardsACORRUPT_referenceWithTheFaultThatWasFound() {
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
+                 "drift":[{"sgId":1,"kind":"marker-reference-corrupt","markerRole":"start",
+                           "markerText":"GB AGENCY START Sonntag",
+                           "detail":"value=DbyhP29u looks like an Instagram post shortcode"}]}
+                """);
+
+        service.forward(USER, "dev-1", report);
+
+        ArgumentCaptor<DriftReportRequest> body = ArgumentCaptor.forClass(DriftReportRequest.class);
+        verify(client).reportDrift(eq("glowbloggeragency"), body.capture());
+        assertThat(body.getValue().kind()).isEqualTo("MARKER_REFERENCE_CORRUPT");
+        assertThat(body.getValue().detail()).contains("shortcode");
+        assertThat(body.getValue().evidenceImage()).isNull(); // a data fault needs no picture
+    }
+
+    @Test
+    void aDriftWithNoPictureOrAnUndecodableOneStillForwardsItsMEASUREMENT() {
+        // An administrator told "this banner moved 15 bits" without a picture is far better off than one told
+        // nothing at all — so a bad image must degrade the report, not drop it.
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"g"}],
+                 "drift":[{"sgId":1,"kind":"marker-image-drift","imageDistance":15},
+                          {"sgId":1,"kind":"marker-image-drift","imageDistance":15,"evidenceImage":""},
+                          {"sgId":1,"kind":"marker-image-drift","imageDistance":15,"evidenceImage":"!!not base64!!"},
+                          {"sgId":1,"kind":"marker-image-drift","imageDistance":15,"evidenceImage":123}]}
+                """);
+
+        service.forward(USER, "dev-1", report);
+
+        ArgumentCaptor<DriftReportRequest> body = ArgumentCaptor.forClass(DriftReportRequest.class);
+        verify(client, times(4)).reportDrift(eq("g"), body.capture());
+        assertThat(body.getAllValues()).allSatisfy(r -> {
+            assertThat(r.imageDistance()).isEqualTo(15);
+            assertThat(r.evidenceImage()).isNull();
+        });
+    }
+
+    @Test
+    void anUnrecognisedKindIsStillDropped() {
+        service.forward(USER, "dev-1", json("""
+                {"supportGroups":[{"sgId":1,"accountName":"g"}],
+                 "drift":[{"sgId":1,"kind":"something-we-do-not-know"}]}
+                """));
+        verifyNoInteractions(client);
+    }
+
     @Test
     void swallowsAForwardingFailureAndContinuesWithTheRest() {
         doThrow(new RuntimeException("rpsupportgroup down")).when(client).reportDrift(eq("grp.one"), any());
