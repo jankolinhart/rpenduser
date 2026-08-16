@@ -91,12 +91,12 @@ public class DriftForwardingService {
         DriftReportRequest req = new DriftReportRequest(kind, deviceId, userId,
                 textField(drift, "nominatedOwnerHandle"), intField(drift, "agreePass"),
                 intField(drift, "disagreePass"), intField(drift, "persistenceCount"),
-                textField(drift, "markerRole"), textField(drift, "markerText"), textField(drift, "detail"),
+                markerRole(drift), textField(drift, "markerText"), textField(drift, "detail"),
                 intField(drift, "imageDistance"), intField(drift, "imageThreshold"),
                 textField(drift, "evidencePostId"), binaryField(drift, "evidenceImage"));
         try {
             client.reportDrift(igAccount, req);
-            return driftKey(clientKind, sgId, textField(drift, "markerRole"), textField(drift, "markerText"),
+            return driftKey(clientKind, sgId, markerRole(drift), textField(drift, "markerText"),
                     textField(drift, "nominatedOwnerHandle"));
         } catch (RuntimeException e) {
             log.warn("failed to forward {} drift for {}: {}", kind, igAccount, e.toString());
@@ -140,6 +140,23 @@ public class DriftForwardingService {
             case "marker-reference-corrupt" -> "MARKER_REFERENCE_CORRUPT";
             default -> null;
         };
+    }
+
+    /**
+     * WHICH marker role this drift is about.
+     *
+     * <p>⚠️ The desktop client serialises it as <strong>{@code markerType}</strong> — that is the component name on
+     * its {@code BackwardContractReport.Drift} record. Reading {@code markerRole} here returned null on every
+     * observation, and a null role is not inert: the cloud's adoption matches references BY role, so it matched
+     * nothing and silently left the vetted profile unchanged. A repair appeared to work while the live banner it
+     * was supposed to add was quietly dropped. The admin card gave it away by saying "the marker reference"
+     * instead of "the start reference".</p>
+     *
+     * <p>{@code markerRole} is accepted as a fallback so a future sender using the cloud-side name also works.</p>
+     */
+    private static String markerRole(JsonNode drift) {
+        String type = textField(drift, "markerType");
+        return type != null ? type : textField(drift, "markerRole");
     }
 
     private static String textField(JsonNode node, String field) {
