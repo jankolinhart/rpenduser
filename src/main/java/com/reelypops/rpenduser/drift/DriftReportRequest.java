@@ -26,12 +26,21 @@ public record DriftReportRequest(
         Integer imageDistance,
         Integer imageThreshold,
         String evidencePostId,
-        byte[] evidenceImage) {
+        byte[] evidenceImage,
+        /**
+         * THE CLIENT'S OWN fingerprint of {@code evidenceImage} — forwarded verbatim, never recomputed.
+         *
+         * <p>Measured 16/08/2026: the cloud's Java dHash lands 15–34 bits from the client's for identical bytes,
+         * which is as far apart as unrelated images. A hash the client will not match is worse than none — it
+         * looks healthy and fails silently. Cross-PLATFORM agreement is proven (0 bits on 3 OSes); it is crossing
+         * IMPLEMENTATIONS that breaks.</p>
+         */
+        String evidenceImageHash) {
 
     /** The two original kinds, which carry no measurement and no picture. */
     public DriftReportRequest(String kind, String reporterDeviceId, UUID reporterUserId, String nominatedOwnerHandle,
                               Integer agreePass, Integer disagreePass, Integer persistenceCount) {
         this(kind, reporterDeviceId, reporterUserId, nominatedOwnerHandle, agreePass, disagreePass, persistenceCount,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 }

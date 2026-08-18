@@ -93,7 +93,8 @@ public class DriftForwardingService {
                 intField(drift, "disagreePass"), intField(drift, "persistenceCount"),
                 markerRole(drift), textField(drift, "markerText"), textField(drift, "detail"),
                 intField(drift, "imageDistance"), intField(drift, "imageThreshold"),
-                textField(drift, "evidencePostId"), binaryField(drift, "evidenceImage"));
+                textField(drift, "evidencePostId"), binaryField(drift, "evidenceImage"),
+                textField(drift, "evidenceImageHash"));
         try {
             client.reportDrift(igAccount, req);
             return driftKey(clientKind, sgId, markerRole(drift), textField(drift, "markerText"),

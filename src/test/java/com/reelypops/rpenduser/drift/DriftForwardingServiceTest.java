@@ -155,6 +155,23 @@ class DriftForwardingServiceTest {
         assertThat(body.getValue().markerRole()).isEqualTo("end");
     }
 
+    @Test
+    void theCLIENTS_hashIsForwardedVERBATIM_neverRecomputed() {
+        // The cloud's own dHash lands 15-34 bits away for identical bytes, so anything it computed would look
+        // healthy and never match. This relay must pass the client's value through untouched.
+        JsonNode report = json("""
+                {"supportGroups":[{"sgId":1,"accountName":"glowbloggeragency"}],
+                 "drift":[{"sgId":1,"kind":"marker-image-drift","markerType":"start","imageDistance":15,
+                           "evidenceImageHash":"%s"}]}
+                """.formatted("1010".repeat(16)));
+
+        service.forward(USER, "dev-1", report);
+
+        ArgumentCaptor<DriftReportRequest> body = ArgumentCaptor.forClass(DriftReportRequest.class);
+        verify(client).reportDrift(eq("glowbloggeragency"), body.capture());
+        assertThat(body.getValue().evidenceImageHash()).isEqualTo("1010".repeat(16));
+    }
+
     // --- ACKNOWLEDGEMENT: which drift actually landed (16/08/2026) ---
 
     @Test
