@@ -35,12 +35,20 @@ public record DriftReportRequest(
          * looks healthy and fails silently. Cross-PLATFORM agreement is proven (0 bits on 3 OSes); it is crossing
          * IMPLEMENTATIONS that breaks.</p>
          */
-        String evidenceImageHash) {
+        String evidenceImageHash,
+        /**
+         * WHICH weekday slot (JS 0=Sun … 6=Sat) the drifting reference belongs to — resolved by the CLIENT from
+         * the marker's own postedOn through the group's per-weekday schedule, {@code null} for a flat/legacy
+         * group. Forwarded verbatim like the hash: this relay must not derive, default or "fix" it, because a
+         * wrong day silently writes a banner into the wrong reference — the 18/08/2026 fault this field exists to
+         * end.
+         */
+        Integer markerWeekday) {
 
     /** The two original kinds, which carry no measurement and no picture. */
     public DriftReportRequest(String kind, String reporterDeviceId, UUID reporterUserId, String nominatedOwnerHandle,
                               Integer agreePass, Integer disagreePass, Integer persistenceCount) {
         this(kind, reporterDeviceId, reporterUserId, nominatedOwnerHandle, agreePass, disagreePass, persistenceCount,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
     }
 }

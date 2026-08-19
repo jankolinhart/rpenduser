@@ -192,7 +192,7 @@ class DriftForwardingServiceTest {
         // Delivered → acknowledged. Threw, unresolvable sgId, unmapped kind → NOT acknowledged, so the client
         // keeps telling us.
         assertThat(acknowledged).containsExactly(
-                DriftForwardingService.driftKey("new-owner", 1L, null, null, "cand.owner"));
+                DriftForwardingService.driftKey("new-owner", 1L, null, null, null, "cand.owner"));
     }
 
     @Test
@@ -207,7 +207,20 @@ class DriftForwardingServiceTest {
 
         assertThat(service.forward(USER, "dev-1", report)).containsExactly(
                 DriftForwardingService.driftKey("marker-reference-corrupt", 1L, "start",
-                        "GB AGENCY START Sonntag", null));
+                        "GB AGENCY START Sonntag", null, null));
+    }
+
+    @Test
+    void theKeyCarriesTheWEEKDAY_byteIdenticalToTheDesktopClient() {
+        // ⚠️ LOCKSTEP CONTRACT with reelypops' DriftAcknowledgementService.key(...): "role text w<weekday>", the
+        // weekday empty when null. Two client rows may share role AND text on different days (the per-weekday
+        // profile allows it); without the weekday in the key one acknowledgement would match both rows and the
+        // loser would re-assert forever. A one-character divergence here acknowledges nothing — a NUL byte hid in
+        // this contract once already.
+        assertThat(DriftForwardingService.driftKey("marker-image-drift", 7L, "start", "START", 2, null))
+                .isEqualTo("marker-image-drift|7|start START w2");
+        assertThat(DriftForwardingService.driftKey("marker-image-drift", 7L, "start", "START", null, null))
+                .isEqualTo("marker-image-drift|7|start START w");
     }
 
     @Test

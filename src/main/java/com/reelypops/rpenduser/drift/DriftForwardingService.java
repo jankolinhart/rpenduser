@@ -63,13 +63,17 @@ public class DriftForwardingService {
      * JSON it happened to send, and an index would silently mis-attribute the moment the ordering changed.</p>
      */
     public static String driftKey(String clientKind, Long sgId, String markerRole, String markerText,
-                                  String nominatedOwnerHandle) {
+                                  Integer markerWeekday, String nominatedOwnerHandle) {
         // ⚠️ MUST stay byte-identical to the desktop client's DriftAcknowledgementService.key(...) — this string
         // IS the contract that lets an acknowledgement find the row that produced it. A silent divergence would
-        // acknowledge nothing and the client would re-assert forever.
+        // acknowledge nothing and the client would re-assert forever (a literal NUL byte hid here once).
+        //
+        // The WEEKDAY is part of the identity: two client rows can share role AND text while describing different
+        // days' banners (the per-weekday profile allows it), and without the weekday one acknowledgement would
+        // match both rows — the unacknowledged one then re-asserts forever.
         String discriminator = nominatedOwnerHandle != null && !nominatedOwnerHandle.isBlank()
                 ? nominatedOwnerHandle.trim()
-                : (safe(markerRole) + " " + safe(markerText));
+                : (safe(markerRole) + " " + safe(markerText) + " w" + (markerWeekday == null ? "" : markerWeekday));
         return safe(clientKind) + "|" + (sgId == null ? "" : sgId) + "|" + discriminator;
     }
 
@@ -94,11 +98,11 @@ public class DriftForwardingService {
                 markerRole(drift), textField(drift, "markerText"), textField(drift, "detail"),
                 intField(drift, "imageDistance"), intField(drift, "imageThreshold"),
                 textField(drift, "evidencePostId"), binaryField(drift, "evidenceImage"),
-                textField(drift, "evidenceImageHash"));
+                textField(drift, "evidenceImageHash"), intField(drift, "markerWeekday"));
         try {
             client.reportDrift(igAccount, req);
             return driftKey(clientKind, sgId, markerRole(drift), textField(drift, "markerText"),
-                    textField(drift, "nominatedOwnerHandle"));
+                    intField(drift, "markerWeekday"), textField(drift, "nominatedOwnerHandle"));
         } catch (RuntimeException e) {
             log.warn("failed to forward {} drift for {}: {}", kind, igAccount, e.toString());
             return null; // unacknowledged — the client re-asserts it
