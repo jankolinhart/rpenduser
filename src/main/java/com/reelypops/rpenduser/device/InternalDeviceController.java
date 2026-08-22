@@ -2,6 +2,7 @@ package com.reelypops.rpenduser.device;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.reelypops.rpenduser.drift.DriftForwardingService;
+import com.reelypops.rpenduser.membership.MembershipForwardingService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,12 +30,15 @@ public class InternalDeviceController {
     private final DeviceService devices;
     private final ClientVersionService clientVersion;
     private final DriftForwardingService driftForwarding;
+    private final MembershipForwardingService membershipForwarding;
 
     public InternalDeviceController(DeviceService devices, ClientVersionService clientVersion,
-                                    DriftForwardingService driftForwarding) {
+                                    DriftForwardingService driftForwarding,
+                                    MembershipForwardingService membershipForwarding) {
         this.devices = devices;
         this.clientVersion = clientVersion;
         this.driftForwarding = driftForwarding;
+        this.membershipForwarding = membershipForwarding;
     }
 
     @PostMapping("/users/{userId}/devices")
@@ -64,6 +68,9 @@ public class InternalDeviceController {
             return ResponseEntity.badRequest().build();
         }
         devices.applyReport(userId, deviceId, body.toString(), stateHash);
+        // B6 follow-gating: forward the report's supportGroups[] as memberships to rpsupportgroup (best-effort — the
+        // service swallows any failure, so a membership-forward fault never fails the report or moves the drift ack).
+        membershipForwarding.forward(userId, body);
         // The response now ACKNOWLEDGES the drift that actually reached rpsupportgroup. A bare 202 told the client
         // "accepted" whether or not its drift was delivered, and the client then stopped re-asserting — so a fault
         // it had reported could sit on it forever while the cloud had never heard of it.
