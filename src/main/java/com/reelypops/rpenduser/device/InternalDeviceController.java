@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -26,6 +27,9 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/enduser/v1/internal")
 public class InternalDeviceController {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(InternalDeviceController.class);
 
     private final DeviceService devices;
     private final ClientVersionService clientVersion;
@@ -67,18 +71,44 @@ public class InternalDeviceController {
         if (deviceId == null || stateHash == null) {
             return ResponseEntity.badRequest().build();
         }
-        devices.applyReport(userId, deviceId, body.toString(), stateHash);
+        Device stored = devices.applyReport(userId, deviceId, body.toString(), stateHash);
         // B6 follow-gating: forward the report's supportGroups[] as memberships to rpsupportgroup (best-effort — the
         // service swallows any failure, so a membership-forward fault never fails the report or moves the drift ack).
         membershipForwarding.forward(userId, body);
         // The response now ACKNOWLEDGES the drift that actually reached rpsupportgroup. A bare 202 told the client
         // "accepted" whether or not its drift was delivered, and the client then stopped re-asserting — so a fault
         // it had reported could sit on it forever while the cloud had never heard of it.
-        return ResponseEntity.accepted().body(new ReportResponse(driftForwarding.forward(userId, deviceId, body)));
+        // WHO ELSE IS WORKING THIS HANDLE. Two devices on one Instagram account do the same work twice at
+        // twice the like-rate, which defeats the client's anti-bot pacing exactly two-fold — an
+        // Instagram-detection risk, not a quota question. The client already told us the handle; this tells it
+        // what we know back, on the reply to the call it was already making, so no new endpoint and no new
+        // round trip. Empty when there is no conflict, so a client that ignores the field is unaffected.
+        // NEVER FAILS THE REPORT, the same rule the membership forward above already follows: the snapshot is
+        // stored by this point, and losing a conflict hint is a smaller harm than 500-ing a call whose work is
+        // already done — the next heartbeat brings another report ~60s later.
+        List<String> alsoWorking = List.of();
+        try {
+            if (stored != null && stored.getFocusedHandle() != null) {
+                alsoWorking = devices.claimingSameHandle(userId, deviceId, stored.getFocusedHandle())
+                        .stream().map(Device::getDeviceId).toList();
+            }
+        } catch (RuntimeException e) {
+            log.warn("focused-handle conflict lookup failed for device {} — reporting no conflict", deviceId, e);
+        }
+        return ResponseEntity.accepted().body(
+                new ReportResponse(driftForwarding.forward(userId, deviceId, body), alsoWorking));
     }
 
     /** The report verdict: which drift observations rpsupportgroup accepted, keyed as {@code kind|sgId|discriminator}. */
-    public record ReportResponse(java.util.List<String> acknowledgedDrift) {
+    /**
+     * @param acknowledgedDrift which drift observations actually reached rpsupportgroup
+     * @param handleAlsoWorkedBy the OTHER device ids of this user reporting the same in-focus handle — empty
+     *                           when there is no conflict, and never null. Device ids are the user's own, so
+     *                           this leaks nothing across accounts; the field is additive, so an older client
+     *                           that ignores it behaves exactly as before.
+     */
+    public record ReportResponse(java.util.List<String> acknowledgedDrift,
+                                 java.util.List<String> handleAlsoWorkedBy) {
     }
 
     /** A non-blank textual field of {@code body}, or {@code null} when absent/blank/non-textual. */
