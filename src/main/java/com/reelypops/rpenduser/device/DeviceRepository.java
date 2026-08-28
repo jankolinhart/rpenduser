@@ -23,6 +23,9 @@ public interface DeviceRepository extends JpaRepository<Device, UUID> {
      */
     List<Device> findByUserIdAndFocusedHandleAndDeviceIdNot(UUID userId, String focusedHandle, String deviceId);
 
+    /** Every device of this user claiming the handle — the candidate set the holder is chosen from. */
+    List<Device> findByUserIdAndFocusedHandle(UUID userId, String focusedHandle);
+
     long deleteByUserIdAndDeviceId(UUID userId, String deviceId);
 
     /** Device tally per user (one row per user that owns at least one device) for the admin dashboard. */

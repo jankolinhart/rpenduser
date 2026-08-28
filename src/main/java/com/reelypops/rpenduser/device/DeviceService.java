@@ -3,6 +3,10 @@ package com.reelypops.rpenduser.device;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.Optional;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -91,8 +95,24 @@ public class DeviceService {
     }
 
     /**
-     * The user's other devices already claiming {@code handle}, newest-seen first. Empty when the handle is
-     * absent, so a caller cannot turn "nothing reported" into a conflict.
+     * How long a device may go unheard before its claim stops blocking anyone. Operator, 28/08/2026: "a few
+     * minutes at best, otherwise the user will assume a fault when nothing is moving."
+     *
+     * <p>Five heartbeats. The asymmetry decides the direction: expiring EARLY hands a live machine's handle to
+     * a second one and recreates the double-like-rate this whole mechanism exists to prevent, while expiring
+     * LATE is only an inconvenience — and one the user can end themselves, because the holder is named and a
+     * takeover is offered. So the window errs long, and the UI carries the weight rather than the timeout.
+     *
+     * <p>Measured on {@code lastSeenAt}, NEVER {@code lastReportAt}. A report is re-sent only when the
+     * stateHash CHANGES, so a device sitting stably on one handle — doing exactly what it should — stops
+     * reporting entirely. Expiring on the report clock would steal the handle from the healthiest device on
+     * the account.
+     */
+    public static final Duration CLAIM_TTL = Duration.ofMinutes(5);
+
+    /**
+     * The user's other devices claiming {@code handle}, whether live or not. Empty when the handle is absent,
+     * so a caller cannot turn "nothing reported" into a conflict.
      */
     @Transactional(readOnly = true)
     public List<Device> claimingSameHandle(UUID userId, String deviceId, String handle) {
@@ -101,6 +121,52 @@ public class DeviceService {
         }
         return devices.findByUserIdAndFocusedHandleAndDeviceIdNot(
                 userId, handle.trim().toLowerCase(java.util.Locale.ROOT), deviceId);
+    }
+
+    /** Heard from within {@link #CLAIM_TTL}. A device with no lastSeenAt at all has never checked in. */
+    static boolean isLive(Device device, Instant now) {
+        return device.getLastSeenAt() != null && !device.getLastSeenAt().isBefore(now.minus(CLAIM_TTL));
+    }
+
+    /**
+     * Who HOLDS {@code handle} for this user, or empty when nobody live does.
+     *
+     * <p>The incumbent holds — the operator's rule of 28/08/2026 — so of the LIVE claimants the one with the
+     * earliest claim stamp wins. A second machine must never be able to interrupt a round already in flight.
+     * A claimant that has gone quiet past {@link #CLAIM_TTL} is not a holder: it blocks nobody, which is what
+     * stops a closed laptop freezing the account it was working.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Device> holderOf(UUID userId, String handle) {
+        if (handle == null || handle.isBlank()) {
+            return Optional.empty();
+        }
+        Instant now = Instant.now();
+        return devices.findByUserIdAndFocusedHandle(userId, handle.trim().toLowerCase(java.util.Locale.ROOT))
+                .stream()
+                .filter(device -> isLive(device, now))
+                .min(Comparator.comparing(Device::getFocusedHandleAt,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+    }
+
+    /**
+     * Hand {@code handle} to {@code toDeviceId}: every OTHER device of this user releases its claim.
+     *
+     * <p>The loser keeps running — this takes away the CLAIM, not the machine. It learns on its next report
+     * that it no longer holds, and because a re-report stamps it afresh it becomes the junior claim and does
+     * not win the handle back. Returns the device ids that yielded, so the caller can say what happened.
+     */
+    @Transactional
+    public List<String> takeOverHandle(UUID userId, String toDeviceId, String handle) {
+        if (handle == null || handle.isBlank() || toDeviceId == null || toDeviceId.isBlank()) {
+            return List.of();
+        }
+        List<Device> yielding = devices.findByUserIdAndFocusedHandleAndDeviceIdNot(
+                userId, handle.trim().toLowerCase(java.util.Locale.ROOT), toDeviceId);
+        List<String> yielded = yielding.stream().map(Device::getDeviceId).toList();
+        yielding.forEach(Device::releaseFocusedHandle);
+        devices.saveAll(yielding);
+        return yielded;
     }
 
     @Transactional(readOnly = true)

@@ -86,29 +86,72 @@ public class InternalDeviceController {
         // NEVER FAILS THE REPORT, the same rule the membership forward above already follows: the snapshot is
         // stored by this point, and losing a conflict hint is a smaller harm than 500-ing a call whose work is
         // already done — the next heartbeat brings another report ~60s later.
-        List<String> alsoWorking = List.of();
+        HandleHolder heldBy = null;
         try {
             if (stored != null && stored.getFocusedHandle() != null) {
-                alsoWorking = devices.claimingSameHandle(userId, deviceId, stored.getFocusedHandle())
-                        .stream().map(Device::getDeviceId).toList();
+                heldBy = devices.holderOf(userId, stored.getFocusedHandle())
+                        // Silence when the caller IS the holder: a device is never told it is blocking itself.
+                        .filter(holder -> !deviceId.equals(holder.getDeviceId()))
+                        .map(HandleHolder::of)
+                        .orElse(null);
             }
         } catch (RuntimeException e) {
-            log.warn("focused-handle conflict lookup failed for device {} — reporting no conflict", deviceId, e);
+            log.warn("focused-handle holder lookup failed for device {} — reporting no conflict", deviceId, e);
         }
         return ResponseEntity.accepted().body(
-                new ReportResponse(driftForwarding.forward(userId, deviceId, body), alsoWorking));
+                new ReportResponse(driftForwarding.forward(userId, deviceId, body), heldBy));
     }
 
     /** The report verdict: which drift observations rpsupportgroup accepted, keyed as {@code kind|sgId|discriminator}. */
     /**
      * @param acknowledgedDrift which drift observations actually reached rpsupportgroup
-     * @param handleAlsoWorkedBy the OTHER device ids of this user reporting the same in-focus handle — empty
-     *                           when there is no conflict, and never null. Device ids are the user's own, so
-     *                           this leaks nothing across accounts; the field is additive, so an older client
-     *                           that ignores it behaves exactly as before.
+     * @param handleHeldBy      the OTHER machine holding this device's in-focus handle, or {@code null} when
+     *                          this device holds it, nobody does, or the holder has gone quiet past the TTL.
+     *                          NULL IS THE SILENT CASE by design: a client acts only on a present holder and
+     *                          can never read absence as a reason to stop, which is what keeps the guard
+     *                          fail-OPEN (D16) when the cloud is unreachable. Additive, so a client that
+     *                          ignores it behaves exactly as before.
      */
-    public record ReportResponse(java.util.List<String> acknowledgedDrift,
-                                 java.util.List<String> handleAlsoWorkedBy) {
+    public record ReportResponse(java.util.List<String> acknowledgedDrift, HandleHolder handleHeldBy) {
+    }
+
+    /**
+     * The machine holding a handle, said plainly enough for a client to render without a second call.
+     *
+     * <p>Carries the user's OWN device id — nothing crosses accounts — plus what it runs on and when it was
+     * last heard from, because "nothing is moving" must never be a mystery: the operator's rule is that the
+     * user is told what holds the handle and how long ago it was seen.
+     */
+    public record HandleHolder(String deviceId, String platform, java.time.Instant lastSeenAt) {
+        static HandleHolder of(Device device) {
+            return new HandleHolder(device.getDeviceId(), device.getPlatform(), device.getLastSeenAt());
+        }
+    }
+
+    /**
+     * DELIBERATE TAKEOVER: this device asks for a handle another machine holds.
+     *
+     * <p>The user is in control rather than waiting on a timeout — the operator's rule of 28/08/2026. Every
+     * other device of theirs releases the claim; the loser keeps RUNNING, it simply stops holding, and because
+     * a re-report stamps its claim afresh it does not win the handle back.
+     *
+     * <p>The reply names who yielded so the caller can wait for them to stand down before it starts liking.
+     * That pause is the point: starting immediately would put two machines on one account for a heartbeat —
+     * precisely the double-rate this exists to prevent, just briefly and by request.
+     */
+    @PostMapping("/users/{userId}/devices/{deviceId}/handle-takeover")
+    public ResponseEntity<TakeoverResponse> takeOverHandle(@PathVariable UUID userId,
+                                                           @PathVariable String deviceId,
+                                                           @RequestBody JsonNode body) {
+        String handle = textField(body, "handle");
+        if (handle == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.ok(new TakeoverResponse(devices.takeOverHandle(userId, deviceId, handle)));
+    }
+
+    /** @param yieldedBy the device ids that gave the handle up — empty when nobody else held it. */
+    public record TakeoverResponse(java.util.List<String> yieldedBy) {
     }
 
     /** A non-blank textual field of {@code body}, or {@code null} when absent/blank/non-textual. */

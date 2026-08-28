@@ -2,6 +2,8 @@ package com.reelypops.rpenduser.device;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -52,5 +54,96 @@ class DeviceServiceClaimTest {
         assertThat(service.claimingSameHandle(USER, "dev-1", "   ")).isEmpty();
 
         verify(devices, never()).findByUserIdAndFocusedHandleAndDeviceIdNot(any(), anyString(), anyString());
+    }
+
+    // --- WHO HOLDS IT: the incumbent, while live ------------------------------------------------------------
+
+    @Test
+    void theIncumbentHolds_soASecondMachineCannotInterruptARoundInFlight() {
+        Device incumbent = seen("dev-1", "mac", "shared_one", Instant.now().minusSeconds(90));
+        Device challenger = seen("dev-2", "win", "shared_one", Instant.now().minusSeconds(60));
+        // Both were heard from within the TTL; the elder CLAIM wins, not the fresher heartbeat.
+        stamp(incumbent, Instant.now().minusSeconds(3600));
+        stamp(challenger, Instant.now().minusSeconds(120));
+        when(devices.findByUserIdAndFocusedHandle(USER, "shared_one"))
+                .thenReturn(List.of(challenger, incumbent));
+
+        assertThat(service.holderOf(USER, "shared_one")).contains(incumbent);
+    }
+
+    @Test
+    void aQuietClaimantHoldsNothing_soAClosedLaptopCannotFreezeTheAccount() {
+        // Six minutes unheard, past the five-minute TTL. It keeps its claim row; it stops BLOCKING.
+        Device gone = seen("dev-1", "mac", "shared_one", Instant.now().minus(Duration.ofMinutes(6)));
+        stamp(gone, Instant.now().minusSeconds(3600));
+        Device live = seen("dev-2", "win", "shared_one", Instant.now().minusSeconds(30));
+        stamp(live, Instant.now().minusSeconds(120));
+        when(devices.findByUserIdAndFocusedHandle(USER, "shared_one")).thenReturn(List.of(gone, live));
+
+        assertThat(service.holderOf(USER, "shared_one")).contains(live);
+    }
+
+    @Test
+    void nobodyHoldsAHandleWhenEveryClaimantHasGoneQuiet() {
+        Device gone = seen("dev-1", "mac", "shared_one", Instant.now().minus(Duration.ofMinutes(30)));
+        when(devices.findByUserIdAndFocusedHandle(USER, "shared_one")).thenReturn(List.of(gone));
+
+        assertThat(service.holderOf(USER, "shared_one")).isEmpty();
+    }
+
+    @Test
+    void anAbsentHandleHasNoHolderAndIsNeverLookedUp() {
+        assertThat(service.holderOf(USER, null)).isEmpty();
+        assertThat(service.holderOf(USER, "  ")).isEmpty();
+        verify(devices, never()).findByUserIdAndFocusedHandle(any(), anyString());
+    }
+
+    // --- TAKEOVER: the user is in control, not the timeout ---------------------------------------------------
+
+    @Test
+    void takeoverMakesEveryOtherDeviceYieldTheHandle() {
+        Device loser = seen("dev-2", "win", "shared_one", Instant.now());
+        when(devices.findByUserIdAndFocusedHandleAndDeviceIdNot(USER, "shared_one", "dev-1"))
+                .thenReturn(List.of(loser));
+
+        assertThat(service.takeOverHandle(USER, "dev-1", "shared_one")).containsExactly("dev-2");
+        // The machine keeps running — it stops HOLDING. Only the claim is taken away.
+        assertThat(loser.getFocusedHandle()).isNull();
+        assertThat(loser.getFocusedHandleAt()).isNull();
+        verify(devices).saveAll(List.of(loser));
+    }
+
+    @Test
+    void aYieldedDeviceDoesNotWinTheHandleBackByRe_reporting() {
+        // The self-healing half. Re-reporting the same handle stamps a NEW claim, so the machine that took
+        // over — whose claim is older — keeps it.
+        Device loser = seen("dev-2", "win", "shared_one", Instant.now());
+        stamp(loser, Instant.now().minusSeconds(3600));
+        when(devices.findByUserIdAndFocusedHandleAndDeviceIdNot(USER, "shared_one", "dev-1"))
+                .thenReturn(List.of(loser));
+        service.takeOverHandle(USER, "dev-1", "shared_one");
+
+        loser.setFocusedHandle("shared_one");   // it re-reports, still focused there
+
+        assertThat(loser.getFocusedHandleAt()).isAfter(Instant.now().minusSeconds(5));
+    }
+
+    @Test
+    void takeoverIsANoOpWithoutAHandleOrADevice() {
+        assertThat(service.takeOverHandle(USER, "dev-1", null)).isEmpty();
+        assertThat(service.takeOverHandle(USER, "dev-1", "  ")).isEmpty();
+        assertThat(service.takeOverHandle(USER, "  ", "shared_one")).isEmpty();
+        verify(devices, never()).findByUserIdAndFocusedHandleAndDeviceIdNot(any(), anyString(), anyString());
+    }
+
+    private static Device seen(String deviceId, String platform, String handle, Instant lastSeen) {
+        Device device = Device.register(USER, deviceId, platform);
+        device.setFocusedHandle(handle);
+        org.springframework.test.util.ReflectionTestUtils.setField(device, "lastSeenAt", lastSeen);
+        return device;
+    }
+
+    private static void stamp(Device device, Instant claimedAt) {
+        org.springframework.test.util.ReflectionTestUtils.setField(device, "focusedHandleAt", claimedAt);
     }
 }

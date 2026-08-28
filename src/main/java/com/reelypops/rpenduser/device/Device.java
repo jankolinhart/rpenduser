@@ -79,6 +79,14 @@ public class Device {
     @Column(name = "focused_handle")
     private String focusedHandle;
 
+    /**
+     * When this device STARTED claiming {@link #focusedHandle} — the ordering that decides who HOLDS a
+     * contested handle. Stamped only when the handle CHANGES; a report that repeats the same handle leaves it
+     * alone, or "earliest claim" would mean nothing and the incumbent would lose its own handle every 60s.
+     */
+    @Column(name = "focused_handle_at")
+    private Instant focusedHandleAt;
+
     private Device(UUID userId, String deviceId, String platform) {
         this.id = UUID.randomUUID();
         this.userId = userId;
@@ -114,11 +122,36 @@ public class Device {
         return focusedHandle;
     }
 
-    /** Normalised at the setter so every comparison downstream is against one spelling. */
+    public Instant getFocusedHandleAt() {
+        return focusedHandleAt;
+    }
+
+    /**
+     * Normalised at the setter so every comparison downstream is against one spelling.
+     *
+     * <p>The claim stamp moves ONLY when the handle actually changes. A device re-reporting the same handle
+     * keeps its original stamp and therefore keeps its seniority — which is the whole point, because the
+     * operator's rule is that the incumbent holds. Re-stamping on every report would let a device lose its
+     * own handle to a challenger simply by staying alive.
+     */
     public void setFocusedHandle(String handle) {
-        this.focusedHandle = handle == null || handle.isBlank()
+        String normalised = handle == null || handle.isBlank()
                 ? null
                 : handle.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!java.util.Objects.equals(this.focusedHandle, normalised)) {
+            this.focusedHandle = normalised;
+            this.focusedHandleAt = normalised == null ? null : Instant.now();
+        }
+    }
+
+    /**
+     * Give up this handle, so a challenger can take it. Used by the deliberate takeover: the loser keeps
+     * running, it simply stops HOLDING. When it next reports the same handle it is stamped afresh and is now
+     * the junior claim, so it correctly does not win the handle back.
+     */
+    public void releaseFocusedHandle() {
+        this.focusedHandle = null;
+        this.focusedHandleAt = null;
     }
 
     public void applyReport(String report, String stateHash) {
