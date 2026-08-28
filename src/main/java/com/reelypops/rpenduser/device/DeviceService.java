@@ -54,7 +54,53 @@ public class DeviceService {
         Device device = devices.findByUserIdAndDeviceId(userId, deviceId)
                 .orElseGet(() -> Device.register(userId, deviceId, null));
         device.applyReport(report, stateHash);
+        device.setFocusedHandle(focusedHandleOf(report));
         return devices.save(device);
+    }
+
+    /**
+     * The handle {@code igAccounts[]} marks {@code inFocus}, or {@code null}.
+     *
+     * <p>TOTAL, and deliberately so: a report is stored opaquely and additively, so this must survive a body
+     * that is malformed, differently shaped, or from a future client. Anything it cannot read means the
+     * device claims NOTHING — never an exception, because a projection failure must not fail the report that
+     * carries it, and never a blank, because a blank would collide with every other silent device.
+     *
+     * <p>More than one {@code inFocus} cannot happen on a correct client (the focus is a singleton row) and is
+     * not worth an error here: the first is taken, which is the same answer the scheduler would act on.
+     */
+    static String focusedHandleOf(String report) {
+        if (report == null || report.isBlank()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode accounts =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(report).path("igAccounts");
+            for (com.fasterxml.jackson.databind.JsonNode account : accounts) {
+                if (account.path("inFocus").asBoolean(false)) {
+                    String handle = account.path("handle").asText(null);
+                    return handle == null || handle.isBlank() ? null : handle;
+                }
+            }
+        } catch (Exception e) {
+            // A report we cannot parse is a report that claims nothing. It is still STORED — the blob is the
+            // source of truth and a later reader may understand it — so nothing is lost by declining to guess.
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * The user's other devices already claiming {@code handle}, newest-seen first. Empty when the handle is
+     * absent, so a caller cannot turn "nothing reported" into a conflict.
+     */
+    @Transactional(readOnly = true)
+    public List<Device> claimingSameHandle(UUID userId, String deviceId, String handle) {
+        if (handle == null || handle.isBlank()) {
+            return List.of();
+        }
+        return devices.findByUserIdAndFocusedHandleAndDeviceIdNot(
+                userId, handle.trim().toLowerCase(java.util.Locale.ROOT), deviceId);
     }
 
     @Transactional(readOnly = true)
