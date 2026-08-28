@@ -69,4 +69,64 @@ class InternalDeviceControllerReportHookTest {
         verifyNoInteractions(membershipForwarding, driftForwarding);
         verify(devices, org.mockito.Mockito.never()).applyReport(any(), anyString(), anyString(), anyString());
     }
+
+    // --- WHO ELSE IS WORKING THIS HANDLE (28/08/2026) -------------------------------------------------------
+    //
+    // Two devices on one Instagram account do the same work twice at twice the like-rate. The client already
+    // reports its in-focus handle; these lock what the cloud says back on the very reply it was already getting.
+
+    @Test
+    void theReplyNamesTheOtherDevicesWorkingTheSameHandle() {
+        JsonNode body = json("""
+                {"deviceId":"dev-1","stateHash":"h",
+                 "igAccounts":[{"handle":"shared_one","inFocus":true,"sessionValid":true}]}
+                """);
+        Device stored = Device.register(USER, "dev-1", "mac");
+        stored.setFocusedHandle("shared_one");
+        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(stored);
+        Device rival = Device.register(USER, "dev-2", "win");
+        when(devices.claimingSameHandle(USER, "dev-1", "shared_one")).thenReturn(List.of(rival));
+
+        var response = controller.report(USER, body);
+
+        assertThat(response.getBody().handleAlsoWorkedBy()).containsExactly("dev-2");
+    }
+
+    @Test
+    void theReplyIsEmptyWhenThisDeviceClaimsNothing() {
+        // No in-focus account means no claim, so the lookup is never even asked — a device working nothing
+        // must not read as conflicting with another device working nothing.
+        JsonNode body = json("""
+                {"deviceId":"dev-1","stateHash":"h",
+                 "igAccounts":[{"handle":"idle_one","inFocus":false,"sessionValid":true}]}
+                """);
+        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h")))
+                .thenReturn(Device.register(USER, "dev-1", "mac"));
+
+        var response = controller.report(USER, body);
+
+        assertThat(response.getBody().handleAlsoWorkedBy()).isEmpty();
+        verify(devices, org.mockito.Mockito.never()).claimingSameHandle(any(), anyString(), anyString());
+    }
+
+    @Test
+    void aFailedConflictLookupNeverFailsTheReport() {
+        // THE RULE THAT MATTERS. The snapshot is already stored by the time the lookup runs, so a fault there
+        // must not turn a call whose work is done into a 500 — the same discipline the membership forward
+        // follows. The client simply hears no conflict, and the next heartbeat brings another report ~60s on.
+        JsonNode body = json("""
+                {"deviceId":"dev-1","stateHash":"h",
+                 "igAccounts":[{"handle":"shared_one","inFocus":true,"sessionValid":true}]}
+                """);
+        Device stored = Device.register(USER, "dev-1", "mac");
+        stored.setFocusedHandle("shared_one");
+        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(stored);
+        when(devices.claimingSameHandle(USER, "dev-1", "shared_one"))
+                .thenThrow(new IllegalStateException("database is having a moment"));
+
+        var response = controller.report(USER, body);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(HttpStatus.ACCEPTED.value());
+        assertThat(response.getBody().handleAlsoWorkedBy()).isEmpty();
+    }
 }
