@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,31 +71,50 @@ class InternalDeviceControllerReportHookTest {
         verify(devices, org.mockito.Mockito.never()).applyReport(any(), anyString(), anyString(), anyString());
     }
 
-    // --- WHO ELSE IS WORKING THIS HANDLE (28/08/2026) -------------------------------------------------------
+    // --- WHO HOLDS THIS HANDLE (28/08/2026) ------------------------------------------------------------------
     //
     // Two devices on one Instagram account do the same work twice at twice the like-rate. The client already
-    // reports its in-focus handle; these lock what the cloud says back on the very reply it was already getting.
+    // reports its in-focus handle; these lock what the cloud says back on the reply it was already getting.
 
     @Test
-    void theReplyNamesTheOtherDevicesWorkingTheSameHandle() {
+    void theReplyNamesTheMachineHoldingTheHandle() {
         JsonNode body = json("""
                 {"deviceId":"dev-1","stateHash":"h",
                  "igAccounts":[{"handle":"shared_one","inFocus":true,"sessionValid":true}]}
                 """);
-        Device stored = Device.register(USER, "dev-1", "mac");
-        stored.setFocusedHandle("shared_one");
-        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(stored);
-        Device rival = Device.register(USER, "dev-2", "win");
-        when(devices.claimingSameHandle(USER, "dev-1", "shared_one")).thenReturn(List.of(rival));
+        Device mine = Device.register(USER, "dev-1", "mac");
+        mine.setFocusedHandle("shared_one");
+        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(mine);
+        Device incumbent = Device.register(USER, "dev-2", "windows");
+        incumbent.setFocusedHandle("shared_one");
+        when(devices.holderOf(USER, "shared_one")).thenReturn(Optional.of(incumbent));
 
         var response = controller.report(USER, body);
 
-        assertThat(response.getBody().handleAlsoWorkedBy()).containsExactly("dev-2");
+        // Named, with what it runs on and when it was last heard from: "nothing is moving" must never be a
+        // mystery — that is what stops the user reading a held handle as a fault.
+        assertThat(response.getBody().handleHeldBy().deviceId()).isEqualTo("dev-2");
+        assertThat(response.getBody().handleHeldBy().platform()).isEqualTo("windows");
+        assertThat(response.getBody().handleHeldBy().lastSeenAt()).isNotNull();
     }
 
     @Test
-    void theReplyIsEmptyWhenThisDeviceClaimsNothing() {
-        // No in-focus account means no claim, so the lookup is never even asked — a device working nothing
+    void aDeviceIsNeverToldItIsBlockingItself() {
+        JsonNode body = json("""
+                {"deviceId":"dev-1","stateHash":"h",
+                 "igAccounts":[{"handle":"mine_alone","inFocus":true,"sessionValid":true}]}
+                """);
+        Device mine = Device.register(USER, "dev-1", "mac");
+        mine.setFocusedHandle("mine_alone");
+        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(mine);
+        when(devices.holderOf(USER, "mine_alone")).thenReturn(Optional.of(mine));
+
+        assertThat(controller.report(USER, body).getBody().handleHeldBy()).isNull();
+    }
+
+    @Test
+    void theReplyIsSilentWhenThisDeviceClaimsNothing() {
+        // No in-focus account means no claim, so the holder is never even looked up — a device working nothing
         // must not read as conflicting with another device working nothing.
         JsonNode body = json("""
                 {"deviceId":"dev-1","stateHash":"h",
@@ -103,30 +123,43 @@ class InternalDeviceControllerReportHookTest {
         when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h")))
                 .thenReturn(Device.register(USER, "dev-1", "mac"));
 
-        var response = controller.report(USER, body);
-
-        assertThat(response.getBody().handleAlsoWorkedBy()).isEmpty();
-        verify(devices, org.mockito.Mockito.never()).claimingSameHandle(any(), anyString(), anyString());
+        assertThat(controller.report(USER, body).getBody().handleHeldBy()).isNull();
+        verify(devices, org.mockito.Mockito.never()).holderOf(any(), anyString());
     }
 
     @Test
-    void aFailedConflictLookupNeverFailsTheReport() {
+    void aFailedHolderLookupNeverFailsTheReport() {
         // THE RULE THAT MATTERS. The snapshot is already stored by the time the lookup runs, so a fault there
-        // must not turn a call whose work is done into a 500 — the same discipline the membership forward
-        // follows. The client simply hears no conflict, and the next heartbeat brings another report ~60s on.
+        // must not turn a call whose work is done into a 500 — the discipline the membership forward follows.
+        // The client simply hears no holder, which is the fail-OPEN direction: absence never stops anything.
         JsonNode body = json("""
                 {"deviceId":"dev-1","stateHash":"h",
                  "igAccounts":[{"handle":"shared_one","inFocus":true,"sessionValid":true}]}
                 """);
-        Device stored = Device.register(USER, "dev-1", "mac");
-        stored.setFocusedHandle("shared_one");
-        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(stored);
-        when(devices.claimingSameHandle(USER, "dev-1", "shared_one"))
+        Device mine = Device.register(USER, "dev-1", "mac");
+        mine.setFocusedHandle("shared_one");
+        when(devices.applyReport(eq(USER), eq("dev-1"), anyString(), eq("h"))).thenReturn(mine);
+        when(devices.holderOf(USER, "shared_one"))
                 .thenThrow(new IllegalStateException("database is having a moment"));
 
         var response = controller.report(USER, body);
 
         assertThat(response.getStatusCode().value()).isEqualTo(HttpStatus.ACCEPTED.value());
-        assertThat(response.getBody().handleAlsoWorkedBy()).isEmpty();
+        assertThat(response.getBody().handleHeldBy()).isNull();
+    }
+
+    @Test
+    void takeoverNamesWhoYielded_soTheCallerKnowsToWaitBeforeItStarts() {
+        when(devices.takeOverHandle(USER, "dev-1", "shared_one")).thenReturn(List.of("dev-2"));
+
+        var response = controller.takeOverHandle(USER, "dev-1", json("{\"handle\":\"shared_one\"}"));
+
+        assertThat(response.getBody().yieldedBy()).containsExactly("dev-2");
+    }
+
+    @Test
+    void takeoverWithoutAHandleIsABadRequest_neverASilentNoOp() {
+        assertThat(controller.takeOverHandle(USER, "dev-1", json("{}")).getStatusCode().value()).isEqualTo(400);
+        verifyNoInteractions(devices);
     }
 }
