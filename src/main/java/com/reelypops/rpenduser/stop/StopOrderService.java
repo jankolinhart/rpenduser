@@ -5,6 +5,8 @@ import com.reelypops.rpenduser.device.DeviceRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,6 +28,15 @@ import java.util.UUID;
 @Service
 public class StopOrderService {
 
+    /**
+     * How long a momentary order — the sign-out a Reset issues — keeps being served.
+     *
+     * <p>Ten minutes against a sixty-second beat: long enough that every machine which was running when the
+     * operator pressed the button hears it several times over, including through a short network drop, and
+     * short enough that it is thoroughly over before anybody could mistake it for a state.
+     */
+    public static final Duration MOMENTARY_WINDOW = Duration.ofMinutes(10);
+
     private final UserStopOrderRepository orders;
     private final DeviceRepository devices;
 
@@ -40,10 +51,22 @@ public class StopOrderService {
      * <p>Re-issuing replaces the order with a new id rather than leaving the old one, so a machine that
      * already obeyed a DISABLE obeys a following KILL. An operator who presses stop twice means it.
      *
+     * <p><strong>Except in one direction: a momentary order never displaces a latching one.</strong>
+     * Reset is offered on every account including a disabled one, and it issues a sign-out — so without
+     * this, pressing Reset on a disabled customer would overwrite their DISABLE with an order that stops
+     * nothing, and every one of their machines would go back to work on its next beat. An administrator
+     * ending somebody's sessions has plainly not decided to un-stop them, so the standing order wins and
+     * the sign-out is folded into it: the harsher instruction is already on its way, and it signs them out
+     * too. Only {@link #clear} lifts a stop, which is the single door rule 4 asks for.
+     *
      * @return the order as the machines will see it
      */
     @Transactional
     public StopDirective order(UUID userId, StopAction action, String orderedBy) {
+        Optional<UserStopOrder> standing = standingOrder(userId, Instant.now());
+        if (!action.latches() && standing.filter(o -> o.getAction().latches()).isPresent()) {
+            return StopDirective.of(standing.get());
+        }
         UserStopOrder order = orders.findById(userId)
                 .map(existing -> {
                     existing.reissue(action, orderedBy);
@@ -86,7 +109,19 @@ public class StopOrderService {
      */
     @Transactional(readOnly = true)
     public Optional<StopDirective> directiveFor(UUID userId) {
-        return orders.findById(userId).map(StopDirective::of);
+        return standingOrder(userId, Instant.now()).map(StopDirective::of);
+    }
+
+    /**
+     * The order that is still in force for this user, or empty.
+     *
+     * <p>The ONE place that answers "is there an order", so the fleet and the console cannot disagree about
+     * it. A momentary order that has outlived its window is not in force, and reading the row directly would
+     * have let the console keep reporting a sign-out as outstanding for ever.
+     */
+    @Transactional(readOnly = true)
+    public Optional<UserStopOrder> standingOrder(UUID userId, Instant now) {
+        return orders.findById(userId).filter(order -> order.stillStands(now, MOMENTARY_WINDOW));
     }
 
     /**

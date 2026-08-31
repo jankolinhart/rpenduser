@@ -20,10 +20,10 @@ import java.util.UUID;
 public class AdminDeviceController {
 
     private final DeviceService devices;
-    private final com.reelypops.rpenduser.stop.UserStopOrderRepository stopOrders;
+    private final com.reelypops.rpenduser.stop.StopOrderService stopOrders;
 
     public AdminDeviceController(DeviceService devices,
-                                 com.reelypops.rpenduser.stop.UserStopOrderRepository stopOrders) {
+                                 com.reelypops.rpenduser.stop.StopOrderService stopOrders) {
         this.devices = devices;
         this.stopOrders = stopOrders;
     }
@@ -47,7 +47,10 @@ public class AdminDeviceController {
         Instant now = Instant.now();
         // ONE READ OF THE ORDER FOR THE WHOLE LIST, for the same reason there is one `now`: two machines
         // compared against two different reads could disagree about whether the same order is outstanding.
-        var order = stopOrders.findById(userId);
+        // Through the service, not the repository: a momentary sign-out that has outlived its window is no
+        // longer served to the fleet, and a console still calling it outstanding would be reporting a stop
+        // that nothing will ever act on.
+        var order = stopOrders.standingOrder(userId, now);
         String liveOrderId = order.map(o -> o.getOrderId().toString()).orElse(null);
         String liveAction = order.map(o -> o.getAction().name()).orElse(null);
         return devices.list(userId).stream()

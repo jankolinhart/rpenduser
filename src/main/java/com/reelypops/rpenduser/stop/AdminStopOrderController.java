@@ -28,7 +28,7 @@ public class AdminStopOrderController {
         this.stopOrders = stopOrders;
     }
 
-    /** @param action DISABLE (finish what is running) or KILL (stop now) */
+    /** @param action SIGN_OUT (stop nothing), DISABLE (finish what is running) or KILL (stop now) */
     public record StopOrderRequest(StopAction action, String orderedBy) {
     }
 

@@ -63,6 +63,17 @@ public class UserStopOrder {
         this.orderedBy = orderedBy;
     }
 
+    /**
+     * Is this order still to be served, given how long it has been sitting here?
+     *
+     * <p>A latching order always is. A momentary one — the sign-out a Reset issues — stops being served once
+     * the window has passed, so it can never ambush a machine that connects long afterwards. See
+     * {@link StopAction#latches()} for why the distinction is not an optimisation.
+     */
+    boolean stillStands(Instant now, java.time.Duration momentaryWindow) {
+        return action.latches() || orderedAt.isAfter(now.minus(momentaryWindow));
+    }
+
     static UserStopOrder issue(UUID userId, StopAction action, String orderedBy) {
         return new UserStopOrder(userId, action, orderedBy);
     }
