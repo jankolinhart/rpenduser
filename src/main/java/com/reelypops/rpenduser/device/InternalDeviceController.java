@@ -60,6 +60,22 @@ public class InternalDeviceController {
     }
 
     /**
+     * The client is closing cleanly and says so.
+     *
+     * <p>A HINT, not the truth. A crash, a power cut or a dead network sends nothing, so presence stays
+     * derived from {@code last_seen_at}; this only brings the ordinary case forward from "within five
+     * minutes" to "immediately". Any later check-in clears it, so a device that comes back is simply back.
+     *
+     * <p>Returns 204: the client is on its way out and has nothing to do with a body. It is also fire-and-
+     * forget on that side — a shutdown must never wait on the network.
+     */
+    @PostMapping("/users/{userId}/devices/goodbye")
+    public ResponseEntity<Void> goodbye(@PathVariable UUID userId, @Valid @RequestBody GoodbyeRequest req) {
+        devices.goodbye(userId, req.deviceId());
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
      * M5.1 report — store the full backward-contract snapshot verbatim (ignore-unknown/additive). The body carries
      * its own {@code deviceId} + {@code stateHash}; a body missing either is a 400. M5 re-vet consumer: after storing,
      * the report's {@code drift[]} is parsed + forwarded to rpsupportgroup (best-effort, never fails the report).

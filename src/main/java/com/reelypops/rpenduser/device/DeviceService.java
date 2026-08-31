@@ -1,5 +1,6 @@
 package com.reelypops.rpenduser.device;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -109,6 +110,66 @@ public class DeviceService {
      * the account.
      */
     public static final Duration CLAIM_TTL = Duration.ofMinutes(5);
+
+    /**
+     * PRESENCE — what an operator should be told about a machine. Three states, not two.
+     *
+     * <p>Deliberately NOT {@link #CLAIM_TTL}. That answers "may another machine take this contested handle?",
+     * where being wrong means two machines liking one account at double the pacing — a SAFETY threshold, and
+     * safety wants to be lenient. This is a DISPLAY threshold, where being wrong costs a stale badge, so it
+     * can be tight. Bending one to serve the other corrupts both. (rpauth's 24h seat-idle timeout is a third
+     * question again, on a commercial clock.)
+     *
+     * <p>Live is three missed 60s beats rather than two, because the client's heartbeat is scheduled with a
+     * fixed DELAY measured from completion and carries no jitter — a slow beat stretches the interval, and
+     * two would mark a healthy-but-slow machine down.
+     *
+     * <p>STALE is what makes a tight LIVE safe: "not beating, but recently was — a blip or a crash". Without
+     * it, LIVE has to be generous to avoid crying wolf, which is what pushes the first boundary out to an
+     * hour and lets a machine that died half an hour ago read as running.
+     *
+     * <p>The age is always shown alongside, so these bands are a convenience rather than the truth.
+     */
+    public enum Presence { LIVE, STALE, OFFLINE }
+
+    @Value("${rp.device.presence.live-within:PT3M}")
+    private Duration liveWithin = Duration.ofMinutes(3);
+
+    @Value("${rp.device.presence.stale-within:PT1H}")
+    private Duration staleWithin = Duration.ofHours(1);
+
+    /** What to show for this device now. See {@link Presence}. */
+    public Presence presenceOf(Device device, Instant now) {
+        if (device == null || device.getLastSeenAt() == null) {
+            return Presence.OFFLINE;   // never heard from is not "live"
+        }
+        // A clean goodbye is believed IMMEDIATELY — that is the whole point of it. checkIn clears the stamp,
+        // so a device that came back cannot still be holding one.
+        if (device.getShutdownAt() != null) {
+            return Presence.OFFLINE;
+        }
+        if (!device.getLastSeenAt().isBefore(now.minus(liveWithin))) {
+            return Presence.LIVE;
+        }
+        if (!device.getLastSeenAt().isBefore(now.minus(staleWithin))) {
+            return Presence.STALE;
+        }
+        return Presence.OFFLINE;
+    }
+
+    /**
+     * The client is closing cleanly and says so.
+     *
+     * <p>Upserts like every other device write, so a goodbye that arrives before any registration still
+     * lands rather than being dropped.
+     */
+    @Transactional
+    public void goodbye(UUID userId, String deviceId) {
+        Device device = devices.findByUserIdAndDeviceId(userId, deviceId)
+                .orElseGet(() -> Device.register(userId, deviceId, null));
+        device.sayGoodbye();
+        devices.save(device);
+    }
 
     /**
      * The user's other devices claiming {@code handle}, whether live or not. Empty when the handle is absent,
