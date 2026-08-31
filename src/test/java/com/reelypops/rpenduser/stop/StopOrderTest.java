@@ -86,11 +86,19 @@ class StopOrderTest {
     }
 
     /**
-     * A MACHINE THAT HAS STOPPED IS NOT TOLD AGAIN. Repeating the order every minute would make a stopped
-     * client re-run its stop for ever, and would leave the console unable to tell obeyed from ordered.
+     * AN OUTSTANDING ORDER KEEPS SAYING SO, even to a machine that has acknowledged it. That is what makes
+     * the instruction reversible.
+     *
+     * <p>This originally stopped repeating after an ack, on the reasoning that a stopped machine does not
+     * need telling twice. Designing the client half showed why that is wrong: the client must tell "stop"
+     * from "you may work" from "I could not ask", and an outage has to land on the third. If an outstanding
+     * order fell silent, a stopped machine would be told exactly what an unreachable cloud tells it —
+     * nothing — and could not tell a release from an outage. It would resume work either way.
+     *
+     * <p>The client applies an order once per orderId and ignores repeats, so nothing is re-run.
      */
     @Test
-    void anAcknowledgedOrderIsNotRepeated() throws Exception {
+    void anOutstandingOrderIsSentAGAINevenAfterItIsAcknowledged() throws Exception {
         UUID user = UUID.randomUUID();
         register(user, "ack-1");
         order(user, "DISABLE");
@@ -100,7 +108,25 @@ class StopOrderTest {
 
         beat(user, "ack-1", orderId)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.stopDirective").doesNotExist());
+                .andExpect(jsonPath("$.stopDirective.action").value("DISABLE"))
+                .andExpect(jsonPath("$.stopDirective.orderId").value(orderId));
+    }
+
+    /**
+     * SILENCE MEANS ONE THING ONLY: no order. That is the property the repeat above exists to protect —
+     * without it, "released" and "cloud unreachable" would look identical to a stopped machine.
+     */
+    @Test
+    void silenceMeansNOorderRatherThanNOnews() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "silent-1");
+        order(user, "KILL");
+        beat(user, "silent-1", null).andExpect(jsonPath("$.stopDirective.action").value("KILL"));
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        beat(user, "silent-1", null).andExpect(jsonPath("$.stopDirective").doesNotExist());
     }
 
     /**
@@ -114,8 +140,6 @@ class StopOrderTest {
         order(user, "DISABLE");
         String first = beat(user, "esc-1", null).andReturn().getResponse().getContentAsString()
                 .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
-        beat(user, "esc-1", first).andExpect(jsonPath("$.stopDirective").doesNotExist());
-
         order(user, "KILL");
 
         beat(user, "esc-1", null)
