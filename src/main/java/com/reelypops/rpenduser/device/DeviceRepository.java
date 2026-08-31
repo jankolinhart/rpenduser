@@ -28,8 +28,20 @@ public interface DeviceRepository extends JpaRepository<Device, UUID> {
 
     long deleteByUserIdAndDeviceId(UUID userId, String deviceId);
 
-    /** Device tally per user (one row per user that owns at least one device) for the admin dashboard. */
-    @Query("select new com.reelypops.rpenduser.device.DeviceCount(d.userId, count(d)) "
+    /**
+     * Device tally per user (one row per user that owns at least one device) for the admin dashboard, with
+     * the LIVE count alongside the total.
+     *
+     * <p>A clean goodbye counts as not-live immediately, matching {@code presenceOf}: a machine that said it
+     * was closing must not keep reading as running for the rest of its live window.
+     *
+     * <p>Grouped in the database rather than in Java because this runs for EVERY user on one dashboard load
+     * — the reason {@code device(last_seen_at)} is indexed.
+     *
+     * @param liveSince the start of the live window; a device heard from at or after it is live
+     */
+    @Query("select new com.reelypops.rpenduser.device.DeviceCount(d.userId, count(d), "
+            + "sum(case when d.lastSeenAt >= :liveSince and d.shutdownAt is null then 1L else 0L end)) "
             + "from Device d group by d.userId")
-    List<DeviceCount> countByUser();
+    List<DeviceCount> countByUser(java.time.Instant liveSince);
 }

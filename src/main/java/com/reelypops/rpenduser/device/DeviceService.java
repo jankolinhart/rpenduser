@@ -50,10 +50,11 @@ public class DeviceService {
      * settings is stored here on the next one.
      */
     @Transactional
-    public boolean heartbeat(UUID userId, String deviceId, boolean online, String stateHash, String deviceName) {
+    public boolean heartbeat(UUID userId, String deviceId, boolean online, String stateHash, String deviceName,
+                             String appVersion) {
         Device device = devices.findByUserIdAndDeviceId(userId, deviceId)
                 .orElseGet(() -> Device.register(userId, deviceId, null));
-        device.checkIn(online);
+        device.checkIn(online, appVersion);
         // A rename rides the heartbeat rather than an endpoint of its own, so this is where a new name lands
         // — within one beat of the user pressing Save, with no second path to fall out of sync.
         device.nameThisMachine(deviceName);
@@ -247,10 +248,19 @@ public class DeviceService {
         return devices.findByUserIdOrderByLastSeenAtDesc(userId);
     }
 
-    /** Per-user device counts for the admin dashboard (internal surface). */
+    /**
+     * Per-user device tallies for the admin dashboard: how many machines, and how many are LIVE right now.
+     *
+     * <p>The live half is what makes the column worth having — "3 devices" says nothing about whether the
+     * user can be helped this minute, and "1 of 3 live" says everything. It is computed in the QUERY rather
+     * than per row, because this feeds the list of every user at once.
+     *
+     * <p>Live here is the same band {@link #presenceOf} calls LIVE, and deliberately the same number: a
+     * summary that disagreed with the drill-down it summarises would be worse than no summary.
+     */
     @Transactional(readOnly = true)
     public List<DeviceCount> counts() {
-        return devices.countByUser();
+        return devices.countByUser(Instant.now().minus(liveWithin));
     }
 
     @Transactional

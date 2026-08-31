@@ -53,7 +53,8 @@ public class InternalDeviceController {
     /** M5.1 heartbeat — refresh liveness + tell the client whether to send a fresh full report; M5.3c — also flag an outdated client. */
     @PostMapping("/users/{userId}/devices/heartbeat")
     public HeartbeatResponse heartbeat(@PathVariable UUID userId, @Valid @RequestBody HeartbeatRequest req) {
-        boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash(), req.deviceName());
+        boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash(), req.deviceName(),
+                req.appVersion());
         boolean updateAvailable = clientVersion.updateAvailable(req.appVersion());
         return new HeartbeatResponse(reportNeeded, updateAvailable, clientVersion.latestVersion(),
                 updateAvailable ? clientVersion.announcement() : null);
