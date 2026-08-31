@@ -9,7 +9,11 @@ import jakarta.validation.constraints.NotBlank;
  *
  * <p>M5.3c: also carries the client's {@code appVersion} (optional — older clients omit it) so the backend can flag
  * an outdated client in the reply.
+ *
+ * <p>It also carries {@code deviceName}, which is what makes the beat the RENAME path: the label rides the
+ * call that already runs every 60s, so there is no rename endpoint and no second path to fall out of sync.
+ * Optional like {@code appVersion}, and absent means "no opinion" rather than "clear it".
  */
 public record HeartbeatRequest(@NotBlank String deviceId, boolean online, @NotBlank String stateHash,
-                               String appVersion) {
+                               String appVersion, String deviceName) {
 }

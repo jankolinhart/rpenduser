@@ -15,8 +15,13 @@ import java.util.UUID;
 /**
  * A device registered to an end user (D3): one row per (user, machine). {@code deviceId} is the client's
  * opaque, salted hardware-fingerprint hash — never the raw MAC/UUID — and {@code platform} is granular OS
- * info (e.g. {@code macOS 14.5}); there is deliberately no hostname, which can embed a real name. rppayment
- * reads this registry for seat enforcement.
+ * info (e.g. {@code macOS 14.5}). rppayment reads this registry for seat enforcement.
+ *
+ * <p>Nothing here is COLLECTED from the machine beyond the fingerprint and the OS. {@link #deviceName} looks
+ * like the hostname this registry has always refused, and is not: the client prefills its name field with the
+ * hostname on a screen the user is looking at and can edit before anything is sent. The rule was against
+ * silent collection, so what changed is that it is now asked for — the value is whatever the user left in the
+ * box, and it may equally be "Kitchen iMac".
  */
 @Entity
 @Table(name = "device")
@@ -35,6 +40,20 @@ public class Device {
 
     @Column(name = "platform")
     private String platform;
+
+    /**
+     * What the USER calls this machine, or {@code null} when no client has ever sent one.
+     *
+     * <p>{@link #deviceId} is the identity and {@link #platform} is the fact; this is the LABEL. It exists
+     * because platform cannot separate two machines on one OS version — the case that matters when the
+     * takeover modal says another machine has your account, when rpauth refuses a seat and names the others,
+     * or when the console shows how many of a user's seats are live.
+     *
+     * <p>Chosen ON the machine, because naming is only unambiguous there. It rides registration and every
+     * heartbeat rather than a rename endpoint, so a rename is just the next check-in.
+     */
+    @Column(name = "device_name")
+    private String deviceName;
 
     @CreationTimestamp
     @Column(name = "first_seen_at", nullable = false, updatable = false)
@@ -181,6 +200,34 @@ public class Device {
     public void releaseFocusedHandle() {
         this.focusedHandle = null;
         this.focusedHandleAt = null;
+    }
+
+    /**
+     * Take the name this client is calling itself.
+     *
+     * <p>ABSENT IS NO OPINION, NOT A CLEAR. A client that has a name always has one to send — its own
+     * fallback is the OS label, never a blank — so silence can only come from a caller that does not know
+     * about names at all, and forgetting a good name on its say-so would be strictly worse than keeping it.
+     *
+     * <p>Truncates instead of refusing. This arrives on the heartbeat, which is also carrying liveness and
+     * the report-needed decision; failing that call over the length of a LABEL would trade presence for
+     * tidiness. The column is the same 80 the client caps at, so a truncation here means a client that did
+     * not cap, not a user who typed too much.
+     */
+    public void nameThisMachine(String deviceName) {
+        if (deviceName == null || deviceName.isBlank()) {
+            return;
+        }
+        String trimmed = deviceName.trim();
+        this.deviceName = trimmed.substring(0, Math.min(trimmed.length(), MAX_NAME_LENGTH));
+    }
+
+    /** Matches the {@code device_name} column and the client's own cap. */
+    static final int MAX_NAME_LENGTH = 80;
+
+    /** What the user calls this machine, or {@code null} — callers fall back to {@link #getPlatform()}. */
+    public String getDeviceName() {
+        return deviceName;
     }
 
     public void applyReport(String report, String stateHash) {

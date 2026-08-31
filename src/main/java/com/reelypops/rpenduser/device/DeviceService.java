@@ -25,26 +25,38 @@ public class DeviceService {
         this.devices = devices;
     }
 
+    /**
+     * Register or re-register a machine. {@code deviceName} is what the user calls it — see
+     * {@link Device#nameThisMachine(String)} for why an absent one leaves the stored name alone.
+     */
     @Transactional
-    public Device register(UUID userId, String deviceId, String platform) {
-        return devices.findByUserIdAndDeviceId(userId, deviceId)
+    public Device register(UUID userId, String deviceId, String platform, String deviceName) {
+        Device device = devices.findByUserIdAndDeviceId(userId, deviceId)
                 .map(existing -> {
                     existing.heartbeat(platform);
-                    return devices.save(existing);
+                    return existing;
                 })
-                .orElseGet(() -> devices.save(Device.register(userId, deviceId, platform)));
+                .orElseGet(() -> Device.register(userId, deviceId, platform));
+        device.nameThisMachine(deviceName);
+        return devices.save(device);
     }
 
     /**
      * M5.1 heartbeat: refresh the device's liveness ({@code online} + last-seen) and report whether the backend
      * wants a fresh full report — i.e. the client's current {@code stateHash} differs from the last one we stored
      * (or we have never stored one). Idempotent-upserts so a heartbeat before the first registration still lands.
+     *
+     * <p>Also the RENAME path: the machine's name travels with every beat, so a name changed in the client's
+     * settings is stored here on the next one.
      */
     @Transactional
-    public boolean heartbeat(UUID userId, String deviceId, boolean online, String stateHash) {
+    public boolean heartbeat(UUID userId, String deviceId, boolean online, String stateHash, String deviceName) {
         Device device = devices.findByUserIdAndDeviceId(userId, deviceId)
                 .orElseGet(() -> Device.register(userId, deviceId, null));
         device.checkIn(online);
+        // A rename rides the heartbeat rather than an endpoint of its own, so this is where a new name lands
+        // — within one beat of the user pressing Save, with no second path to fall out of sync.
+        device.nameThisMachine(deviceName);
         boolean reportNeeded = !Objects.equals(stateHash, device.getStateHash());
         devices.save(device);
         return reportNeeded;

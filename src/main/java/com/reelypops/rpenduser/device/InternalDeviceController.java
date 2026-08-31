@@ -47,13 +47,13 @@ public class InternalDeviceController {
 
     @PostMapping("/users/{userId}/devices")
     public DeviceResponse register(@PathVariable UUID userId, @Valid @RequestBody RegisterDeviceRequest req) {
-        return DeviceResponse.of(devices.register(userId, req.deviceId(), req.platform()));
+        return DeviceResponse.of(devices.register(userId, req.deviceId(), req.platform(), req.deviceName()));
     }
 
     /** M5.1 heartbeat — refresh liveness + tell the client whether to send a fresh full report; M5.3c — also flag an outdated client. */
     @PostMapping("/users/{userId}/devices/heartbeat")
     public HeartbeatResponse heartbeat(@PathVariable UUID userId, @Valid @RequestBody HeartbeatRequest req) {
-        boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash());
+        boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash(), req.deviceName());
         boolean updateAvailable = clientVersion.updateAvailable(req.appVersion());
         return new HeartbeatResponse(reportNeeded, updateAvailable, clientVersion.latestVersion(),
                 updateAvailable ? clientVersion.announcement() : null);
@@ -137,10 +137,16 @@ public class InternalDeviceController {
      * <p>Carries the user's OWN device id — nothing crosses accounts — plus what it runs on and when it was
      * last heard from, because "nothing is moving" must never be a mystery: the operator's rule is that the
      * user is told what holds the handle and how long ago it was seen.
+     *
+     * <p>{@code deviceName} is what makes that sentence usable. "Your other Mac has this account" is not an
+     * answer to someone with two Macs; "Kitchen iMac has it" is. Nullable, so a client renders the platform
+     * when there is no name.
      */
-    public record HandleHolder(String deviceId, String platform, java.time.Instant lastSeenAt) {
+    public record HandleHolder(String deviceId, String platform, String deviceName,
+                               java.time.Instant lastSeenAt) {
         static HandleHolder of(Device device) {
-            return new HandleHolder(device.getDeviceId(), device.getPlatform(), device.getLastSeenAt());
+            return new HandleHolder(device.getDeviceId(), device.getPlatform(), device.getDeviceName(),
+                    device.getLastSeenAt());
         }
     }
 
