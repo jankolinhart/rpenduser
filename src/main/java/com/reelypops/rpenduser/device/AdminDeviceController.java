@@ -50,11 +50,9 @@ public class AdminDeviceController {
         // Through the service, not the repository: a momentary sign-out that has outlived its window is no
         // longer served to the fleet, and a console still calling it outstanding would be reporting a stop
         // that nothing will ever act on.
-        var order = stopOrders.standingOrder(userId, now);
-        String liveOrderId = order.map(o -> o.getOrderId().toString()).orElse(null);
-        String liveAction = order.map(o -> o.getAction().name()).orElse(null);
+        var order = stopOrders.standingOrder(userId, now).orElse(null);
         return devices.list(userId).stream()
-                .map(device -> AdminDeviceView.of(device, devices.presenceOf(device, now), liveOrderId, liveAction))
+                .map(device -> AdminDeviceView.of(device, devices.presenceOf(device, now), order, now))
                 .toList();
     }
 }
