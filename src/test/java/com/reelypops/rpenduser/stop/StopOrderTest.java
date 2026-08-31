@@ -9,7 +9,11 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -36,6 +40,7 @@ class StopOrderTest {
     private static final String KEY = "test-internal-key";
 
     @Autowired MockMvc mvc;
+    @Autowired StopOrderService stopOrders;
 
     private void register(UUID user, String deviceId) throws Exception {
         mvc.perform(post("/enduser/v1/devices").with(jwt().jwt(j -> j.subject(user.toString())))
@@ -276,5 +281,135 @@ class StopOrderTest {
                 .andExpect(status().isUnauthorized());
         mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", UUID.randomUUID()))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // SIGN_OUT — the one order that stops nothing, and the one that must not outlive the press
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * Reset rides the same carrier as the other three.
+     *
+     * <p>It exists because the alternative was Reset alone waiting up to eight minutes for a keep-alive to
+     * be refused while Disable, Kill and Remove all landed in sixty seconds. Three of four actions being
+     * prompt and one being slow reads as a fault whether or not it is one.
+     */
+    @Test
+    void aSignOutIsCarriedToTheMachineLikeAnyOtherOrder() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "sign-out-1");
+        order(user, "SIGN_OUT");
+
+        beat(user, "sign-out-1", null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stopDirective.action").value("SIGN_OUT"))
+                .andExpect(jsonPath("$.stopDirective.orderId", notNullValue()));
+    }
+
+    /**
+     * <strong>AND IT EXPIRES.</strong> The fault this prevents: a Reset leaves the account ACTIVE, so a
+     * latched sign-out would sit in the table indefinitely and a laptop opened for the first time a
+     * fortnight later would sign itself out sixty seconds after connecting — no administrator anywhere near
+     * it, and no button to press to make it stop.
+     *
+     * <p>Nothing is lost by the expiry: that machine's refresh token was revoked when the button was
+     * pressed, so it signs out on its next keep-alive regardless. The order only makes it PROMPT for the
+     * machines that were actually running.
+     */
+    @Test
+    void aSignOutStopsBeingServedOnceItsWindowHasPassed() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "sign-out-2");
+        order(user, "SIGN_OUT");
+        Instant issued = Instant.now();
+
+        assertThat(stopOrders.standingOrder(user, issued.plus(Duration.ofMinutes(9))))
+                .as("still inside the window, and every running machine must still hear it")
+                .isPresent();
+        assertThat(stopOrders.standingOrder(user, issued.plus(Duration.ofMinutes(11))))
+                .as("past the window — it must never reach a machine that connects later")
+                .isEmpty();
+    }
+
+    /** A latching order is the opposite, and stands until somebody lifts it. */
+    @Test
+    void aDisableStandsHoweverLongItHasBeenThere() {
+        UUID user = UUID.randomUUID();
+        stopOrders.order(user, StopAction.DISABLE, "someone");
+
+        assertThat(stopOrders.standingOrder(user, Instant.now().plus(Duration.ofDays(30))))
+                .as("Enable is what ends a disable, never the passage of time")
+                .isPresent();
+    }
+
+    /** Kill latches for the same reason, and is worth pinning separately — it is the harshest one. */
+    @Test
+    void aKillStandsHoweverLongItHasBeenThere() {
+        UUID user = UUID.randomUUID();
+        stopOrders.order(user, StopAction.KILL, "someone");
+
+        assertThat(stopOrders.standingOrder(user, Instant.now().plus(Duration.ofDays(30))))
+                .isPresent();
+    }
+
+    /**
+     * <strong>A SIGN-OUT MUST NOT LIFT A STOP.</strong> Reset is offered on every account including a
+     * disabled one, so without this guard the gentlest button in the console would be the one that undid
+     * the harshest: the DISABLE would be overwritten by an order that stops nothing, and every machine
+     * belonging to that customer would go back to work on its next beat.
+     *
+     * <p>Only Enable lifts a stop. That is rule 4's single door, and this is the test that keeps it single.
+     */
+    @Test
+    void aSignOutCannotDisplaceAStandingDisable() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "no-downgrade-1");
+        order(user, "DISABLE");
+
+        order(user, "SIGN_OUT");
+
+        beat(user, "no-downgrade-1", null)
+                .andExpect(jsonPath("$.stopDirective.action").value("DISABLE"));
+    }
+
+    /** The same, for the one it would matter most on. */
+    @Test
+    void aSignOutCannotDisplaceAStandingKill() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "no-downgrade-2");
+        order(user, "KILL");
+
+        order(user, "SIGN_OUT");
+
+        beat(user, "no-downgrade-2", null)
+                .andExpect(jsonPath("$.stopDirective.action").value("KILL"));
+    }
+
+    /** But escalation still works in the direction that tightens: a sign-out gives way to a disable. */
+    @Test
+    void aDisableStillOverridesAStandingSignOut() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "escalate-1");
+        order(user, "SIGN_OUT");
+
+        order(user, "DISABLE");
+
+        beat(user, "escalate-1", null)
+                .andExpect(jsonPath("$.stopDirective.action").value("DISABLE"));
+    }
+
+    /** And a second Reset re-issues normally when nothing harsher is standing. */
+    @Test
+    void aSecondSignOutReissuesWhenNothingHarsherStands() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "reissue-1");
+        order(user, "SIGN_OUT");
+        String first = stopOrders.directiveFor(user).orElseThrow().orderId();
+
+        order(user, "SIGN_OUT");
+
+        assertThat(stopOrders.directiveFor(user).orElseThrow().orderId())
+                .as("a machine that already obeyed the first must obey the second")
+                .isNotEqualTo(first);
     }
 }
