@@ -59,13 +59,13 @@ public class InternalDeviceController {
         boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash(), req.deviceName(),
                 req.appVersion());
         boolean updateAvailable = clientVersion.updateAvailable(req.appVersion());
-        // THE ACK FIRST, THEN THE DIRECTIVE. A machine confirming it has stopped must be recorded before we
-        // decide what to tell it, or it would be handed the very order it has just reported obeying and
-        // would carry it out again on every beat.
+        // The acknowledgement answers "did it land" for the console; it does NOT silence the directive.
+        // An outstanding order keeps being sent so that silence can mean one thing only — no order — and
+        // the client can tell an outage (keep doing what you were) from a release (you may work again).
         stopOrders.acknowledge(userId, req.deviceId(), req.ackStopOrderId());
         return new HeartbeatResponse(reportNeeded, updateAvailable, clientVersion.latestVersion(),
                 updateAvailable ? clientVersion.announcement() : null,
-                stopOrders.directiveFor(userId, req.deviceId()).orElse(null));
+                stopOrders.directiveFor(userId).orElse(null));
     }
 
     /**

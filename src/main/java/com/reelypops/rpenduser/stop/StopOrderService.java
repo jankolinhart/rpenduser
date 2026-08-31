@@ -69,21 +69,24 @@ public class StopOrderService {
     /**
      * What this device should be told, or empty.
      *
-     * <p>Empty when there is no order, and ALSO when this device has already acknowledged the current one —
-     * a machine that has stopped does not need telling again every minute, and repeating the instruction
-     * would make a stopped client re-run its stop on every beat.
+     * <p><strong>SENT ON EVERY BEAT FOR AS LONG AS THE ORDER STANDS</strong>, including to a machine that
+     * has already acknowledged it. That is not chatter — it is what makes the instruction reversible.
+     *
+     * <p>This originally stopped repeating once a device acknowledged, on the reasoning that a stopped
+     * machine does not need telling twice. Designing the client half showed why that is wrong. The client
+     * must distinguish three answers: <em>stop</em>, <em>you may work</em>, and <em>I could not ask</em> —
+     * and an outage has to land on the third, leaving whatever state the machine already had. That means
+     * the SILENCE of an outage and the SILENCE of "no order" cannot both mean the same thing, so an
+     * outstanding order has to keep saying so. Suppressing it after an ack made a stopped-and-acked machine
+     * indistinguishable from a released one, and it would have resumed work the moment it was told nothing
+     * — which is precisely what an unreachable cloud looks like.
+     *
+     * <p>The client applies an order once per {@code orderId} and ignores the repeats, so nothing is re-run.
+     * The acknowledgement is kept for the console alone: it answers "did it land", never "should I stop".
      */
     @Transactional(readOnly = true)
-    public Optional<StopDirective> directiveFor(UUID userId, String deviceId) {
-        return orders.findById(userId)
-                .filter(order -> !alreadyObeyed(userId, deviceId, order))
-                .map(StopDirective::of);
-    }
-
-    private boolean alreadyObeyed(UUID userId, String deviceId, UserStopOrder order) {
-        return devices.findByUserIdAndDeviceId(userId, deviceId)
-                .map(device -> order.getOrderId().equals(device.getStopAckedOrderId()))
-                .orElse(false);
+    public Optional<StopDirective> directiveFor(UUID userId) {
+        return orders.findById(userId).map(StopDirective::of);
     }
 
     /**
