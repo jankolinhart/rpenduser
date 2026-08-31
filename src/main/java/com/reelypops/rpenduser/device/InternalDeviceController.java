@@ -35,10 +35,13 @@ public class InternalDeviceController {
     private final ClientVersionService clientVersion;
     private final DriftForwardingService driftForwarding;
     private final MembershipForwardingService membershipForwarding;
+    private final com.reelypops.rpenduser.stop.StopOrderService stopOrders;
 
     public InternalDeviceController(DeviceService devices, ClientVersionService clientVersion,
                                     DriftForwardingService driftForwarding,
-                                    MembershipForwardingService membershipForwarding) {
+                                    MembershipForwardingService membershipForwarding,
+                                    com.reelypops.rpenduser.stop.StopOrderService stopOrders) {
+        this.stopOrders = stopOrders;
         this.devices = devices;
         this.clientVersion = clientVersion;
         this.driftForwarding = driftForwarding;
@@ -56,8 +59,13 @@ public class InternalDeviceController {
         boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash(), req.deviceName(),
                 req.appVersion());
         boolean updateAvailable = clientVersion.updateAvailable(req.appVersion());
+        // THE ACK FIRST, THEN THE DIRECTIVE. A machine confirming it has stopped must be recorded before we
+        // decide what to tell it, or it would be handed the very order it has just reported obeying and
+        // would carry it out again on every beat.
+        stopOrders.acknowledge(userId, req.deviceId(), req.ackStopOrderId());
         return new HeartbeatResponse(reportNeeded, updateAvailable, clientVersion.latestVersion(),
-                updateAvailable ? clientVersion.announcement() : null);
+                updateAvailable ? clientVersion.announcement() : null,
+                stopOrders.directiveFor(userId, req.deviceId()).orElse(null));
     }
 
     /**

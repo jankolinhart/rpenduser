@@ -15,5 +15,5 @@ import jakarta.validation.constraints.NotBlank;
  * Optional like {@code appVersion}, and absent means "no opinion" rather than "clear it".
  */
 public record HeartbeatRequest(@NotBlank String deviceId, boolean online, @NotBlank String stateHash,
-                               String appVersion, String deviceName) {
+                               String appVersion, String deviceName, String ackStopOrderId) {
 }

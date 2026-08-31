@@ -10,7 +10,14 @@ import com.reelypops.rpenduser.release.ReleaseAnnouncement;
  * <p>M5.3c: also whether the client is behind the announced latest release ({@code updateAvailable}) + that
  * {@code latestVersion}, and — when behind and a blurb has been announced — the {@code announcement} payload
  * (urgency + curated highlights) to surface on the "update available" affordance ({@code null} otherwise).
+ *
+ * <p>31/08/2026: it also carries {@code stopDirective} — an administrator telling this user's machines to
+ * stop. NULL MEANS NO INSTRUCTION, and every client must read it that way. A missing field, an older
+ * backend, a null body and an unreachable cloud all present as null, so "we did not hear an order" and
+ * "there is no order" are deliberately indistinguishable. That is what keeps one outage from stopping every
+ * customer at once.
  */
 public record HeartbeatResponse(boolean reportNeeded, boolean updateAvailable, String latestVersion,
-                                ReleaseAnnouncement announcement) {
+                                ReleaseAnnouncement announcement,
+                               com.reelypops.rpenduser.stop.StopDirective stopDirective) {
 }
