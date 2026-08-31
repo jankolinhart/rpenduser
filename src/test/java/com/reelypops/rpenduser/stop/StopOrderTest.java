@@ -41,6 +41,14 @@ class StopOrderTest {
 
     @Autowired MockMvc mvc;
     @Autowired StopOrderService stopOrders;
+    @Autowired com.reelypops.rpenduser.device.DeviceRepository devices;
+
+    /** Backdate a machine's last check-in, so "closed for weeks" can be tested without waiting weeks. */
+    private void lastSeen(UUID user, String deviceId, java.time.Duration ago) {
+        var device = devices.findByUserIdAndDeviceId(user, deviceId).orElseThrow();
+        org.springframework.test.util.ReflectionTestUtils.setField(device, "lastSeenAt", Instant.now().minus(ago));
+        devices.save(device);
+    }
 
     private void register(UUID user, String deviceId) throws Exception {
         mvc.perform(post("/enduser/v1/devices").with(jwt().jwt(j -> j.subject(user.toString())))
@@ -411,5 +419,150 @@ class StopOrderTest {
         assertThat(stopOrders.directiveFor(user).orElseThrow().orderId())
                 .as("a machine that already obeyed the first must obey the second")
                 .isNotEqualTo(first);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // AN ACKNOWLEDGEMENT IS ONLY MEANINGFUL BESIDE THE ORDER IT ANSWERS
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * <strong>A LIFTED STOP MUST STOP BEING REPORTED.</strong>
+     *
+     * <p>The ack columns outlive the order — Enable deletes the order row and touches no device — so a
+     * machine that obeyed a disable an hour ago, was re-enabled, and has been working ever since still
+     * carried its acknowledgement on the wire. The console rendered it in red, permanently. The operator met
+     * exactly that: a LIVE machine, seen just now, working a handle, under a badge reading "stopped 39m
+     * ago". It was not stopped, and nothing on the row could have told anyone otherwise.
+     */
+    @Test
+    void anAcknowledgementDisappearsWithTheOrderItAnswered() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "lifted-1");
+        order(user, "DISABLE");
+        String orderId = beat(user, "lifted-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+        beat(user, "lifted-1", orderId);
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopAckedAt").exists());
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopAckedAt").doesNotExist())
+                .andExpect(jsonPath("$[0].stopAckedOrderId").doesNotExist())
+                .andExpect(jsonPath("$[0].stopAction").doesNotExist())
+                .andExpect(jsonPath("$[0].stopPending").value(false));
+    }
+
+    /**
+     * <strong>A SIGN-OUT IS A MOMENT, NOT A STATE.</strong>
+     *
+     * <p>Once a machine has obeyed one there is nothing left to report: the account is active, no work was
+     * touched, and the only consequence was a login prompt the user has very likely already answered. It
+     * produced a row reading "signed out 1m ago" beside a LIVE badge — and LIVE means the machine is sending
+     * heartbeats, which needs an access token, which means it is signed IN. One row contradicting itself.
+     */
+    @Test
+    void anObeyedSignOutIsNotReportedAfterwards() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "moment-1");
+        order(user, "SIGN_OUT");
+        String orderId = beat(user, "moment-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+        beat(user, "moment-1", orderId);
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopAckedAt").doesNotExist())
+                .andExpect(jsonPath("$[0].stopPending").value(false));
+    }
+
+    /** A disable that has landed is the opposite: it describes a condition still in force, so it stays. */
+    @Test
+    void anObeyedDisableIsStillReported() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "standing-1");
+        order(user, "DISABLE");
+        String orderId = beat(user, "standing-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+        beat(user, "standing-1", orderId);
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopAckedAt").exists())
+                .andExpect(jsonPath("$[0].stopAction").value("DISABLE"));
+    }
+
+    /**
+     * <strong>AND A SIGN-OUT CANNOT BE PENDING ON A MACHINE THAT WILL NOT SEE IT.</strong>
+     *
+     * <p>The console tells an unreached machine that it "stops if it returns", which is true of a disable —
+     * that order is still waiting. A sign-out is not: it expires within minutes. Two machines last seen 43
+     * days ago were being promised a sign-out that could never reach them.
+     */
+    @Test
+    void aSignOutIsNotPendingOnAMachineClosedLongerThanItWillLive() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "long-gone-1");
+        lastSeen(user, "long-gone-1", java.time.Duration.ofDays(43));
+        order(user, "SIGN_OUT");
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopPending").value(false));
+    }
+
+    /** A DISABLE on the same long-gone machine IS still pending — it stands until somebody lifts it. */
+    @Test
+    void aDisableIsStillPendingOnAMachineClosedForWeeks() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "long-gone-2");
+        lastSeen(user, "long-gone-2", java.time.Duration.ofDays(43));
+        order(user, "DISABLE");
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopPending").value(true));
+    }
+
+    /** But a machine seen moments ago hears a sign-out perfectly well, and must still be told it is coming. */
+    @Test
+    void aSignOutIsPendingOnAMachineSeenMomentsAgo() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "recent-1");
+        order(user, "SIGN_OUT");
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopPending").value(true))
+                .andExpect(jsonPath("$[0].stopAction").value("SIGN_OUT"));
+    }
+
+    /**
+     * <strong>AN OLD ACKNOWLEDGEMENT MUST NOT ANSWER A NEW ORDER.</strong>
+     *
+     * <p>The nastiest shape of the same fault, and the only one where the id comparison is load-bearing on
+     * its own: an operator escalates from Disable to Kill. The machine obeyed the disable, so it carries an
+     * acknowledgement — for the wrong order. Reporting it beside the standing KILL would put "stopped 3m
+     * ago" on a machine that has not heard the kill at all, which is precisely the reassurance an operator
+     * must not be given while an emergency stop is still in flight.
+     *
+     * <p>Every other case is caught twice over by the momentary rule beside it; this one is caught here or
+     * nowhere, which is why it is worth its own test. A mutation removing the comparison survives the whole
+     * rest of this file.
+     */
+    @Test
+    void anAcknowledgementOfAnEARLIERorderDoesNotAnswerTheOneNowStanding() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "escalated-1");
+        order(user, "DISABLE");
+        String first = beat(user, "escalated-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+        beat(user, "escalated-1", first);
+
+        order(user, "KILL");   // a NEW id; the machine has not heard this one
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopAction").value("KILL"))
+                .andExpect(jsonPath("$[0].stopPending").value(true))
+                .andExpect(jsonPath("$[0].stopAckedAt").doesNotExist())
+                .andExpect(jsonPath("$[0].stopAckedOrderId").doesNotExist());
     }
 }
