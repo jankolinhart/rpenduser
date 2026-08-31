@@ -72,7 +72,7 @@ class DeviceNameTest {
         device.nameThisMachine("Old name");
         existing(device);
 
-        service.heartbeat(USER, "dev-1", true, "hash", "Studio Mac");
+        service.heartbeat(USER, "dev-1", true, "hash", "Studio Mac", "1.2.3");
 
         assertThat(device.getDeviceName()).isEqualTo("Studio Mac");
     }
@@ -86,7 +86,7 @@ class DeviceNameTest {
         device.nameThisMachine("Kitchen iMac");
         existing(device);
 
-        service.heartbeat(USER, "dev-1", true, "hash", null);
+        service.heartbeat(USER, "dev-1", true, "hash", null, "1.2.3");
 
         assertThat(device.getDeviceName()).isEqualTo("Kitchen iMac");
     }
@@ -142,7 +142,7 @@ class DeviceNameTest {
         Device device = Device.register(USER, "dev-1", "Mac OS X 14.5");
         device.nameThisMachine("Kitchen iMac");
 
-        AdminDeviceView view = AdminDeviceView.of(device);
+        AdminDeviceView view = AdminDeviceView.of(device, DeviceService.Presence.LIVE);
 
         assertThat(view.deviceName()).isEqualTo("Kitchen iMac");
         assertThat(view.platform()).isEqualTo("Mac OS X 14.5");

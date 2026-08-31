@@ -55,6 +55,19 @@ public class Device {
     @Column(name = "device_name")
     private String deviceName;
 
+    /**
+     * The client build this machine last reported, or {@code null}.
+     *
+     * <p>The heartbeat has always carried it — it was read to decide whether to offer an update, then
+     * dropped. Keeping it turns "which version is that user on?" from a support question into a column.
+     *
+     * <p>Same rule as {@link #deviceName}: an absent one is no opinion. A client that has a version always
+     * sends it, so silence means a caller that predates the field, and a remembered version is better than
+     * a forgotten one.
+     */
+    @Column(name = "app_version")
+    private String appVersion;
+
     @CreationTimestamp
     @Column(name = "first_seen_at", nullable = false, updatable = false)
     private Instant firstSeenAt;
@@ -136,6 +149,14 @@ public class Device {
     public void heartbeat(String platform) {
         this.platform = platform;
         this.lastSeenAt = Instant.now();
+    }
+
+    /** Record a lightweight M5.1 heartbeat: refresh liveness (online + last-seen). */
+    public void checkIn(boolean online, String appVersion) {
+        if (appVersion != null && !appVersion.isBlank()) {
+            this.appVersion = appVersion.trim();
+        }
+        checkIn(online);
     }
 
     /** Record a lightweight M5.1 heartbeat: refresh liveness (online + last-seen). */
@@ -228,6 +249,11 @@ public class Device {
     /** What the user calls this machine, or {@code null} — callers fall back to {@link #getPlatform()}. */
     public String getDeviceName() {
         return deviceName;
+    }
+
+    /** The client build last reported, or {@code null} on a machine that has never said. */
+    public String getAppVersion() {
+        return appVersion;
     }
 
     public void applyReport(String report, String stateHash) {
