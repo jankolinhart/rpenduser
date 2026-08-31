@@ -42,6 +42,7 @@ class StopOrderTest {
     @Autowired MockMvc mvc;
     @Autowired StopOrderService stopOrders;
     @Autowired com.reelypops.rpenduser.device.DeviceRepository devices;
+    @Autowired UserStopOrderRepository orderRows;
 
     /** Backdate a machine's last check-in, so "closed for weeks" can be tested without waiting weeks. */
     private void lastSeen(UUID user, String deviceId, java.time.Duration ago) {
@@ -215,6 +216,10 @@ class StopOrderTest {
                 .andExpect(jsonPath("$.stopDirective.action").value("KILL"));
     }
 
+    /**
+     * NOTE: this passes on a KILL, and would now fail on a SIGN_OUT — deliberately. A sign-out's
+     * acknowledgement is not reported once obeyed, because it describes a moment rather than a condition.
+     */
     @Test
     void theAdminViewShowsWhichMachinesHaveOBEYED() throws Exception {
         UUID user = UUID.randomUUID();
@@ -540,9 +545,12 @@ class StopOrderTest {
      *
      * <p>The nastiest shape of the same fault, and the only one where the id comparison is load-bearing on
      * its own: an operator escalates from Disable to Kill. The machine obeyed the disable, so it carries an
-     * acknowledgement — for the wrong order. Reporting it beside the standing KILL would put "stopped 3m
-     * ago" on a machine that has not heard the kill at all, which is precisely the reassurance an operator
-     * must not be given while an emergency stop is still in flight.
+     * acknowledgement — for the wrong order — and the wire would assert that it had obeyed the kill.
+     *
+     * <p><strong>Do not try to confirm this through the console.</strong> An escalation sets
+     * {@code stopPending}, so the surface renders "stopping…" and never reaches the branch that shows an
+     * acknowledgement; checking it there would suggest the guard is dead code. Its value is that the
+     * REGISTRY stops claiming something untrue, which is what protects the next consumer to read it.
      *
      * <p>Every other case is caught twice over by the momentary rule beside it; this one is caught here or
      * nowhere, which is why it is worth its own test. A mutation removing the comparison survives the whole
@@ -564,5 +572,83 @@ class StopOrderTest {
                 .andExpect(jsonPath("$[0].stopPending").value(true))
                 .andExpect(jsonPath("$[0].stopAckedAt").doesNotExist())
                 .andExpect(jsonPath("$[0].stopAckedOrderId").doesNotExist());
+    }
+
+    /**
+     * RE-ACKNOWLEDGING THE SAME ORDER MUST NOT MOVE THE CLOCK.
+     *
+     * <p>The client re-states what it is obeying on every ordinary beat, so a console that missed the first
+     * acknowledgement catches up. Stamping "now" each time would make "stopped 40m ago" read "just now" for
+     * ever — an age that resets itself is worse than no age at all, because it looks like the stop keeps
+     * re-landing on a machine that in fact obeyed once, long ago.
+     */
+    @Test
+    void reAcknowledgingTheSameOrderLeavesTheAgeAlone() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "steady-1");
+        order(user, "DISABLE");
+        String orderId = beat(user, "steady-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+        beat(user, "steady-1", orderId);
+
+        String first = mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"stopAckedAt\":\"([^\"]+)\".*", "$1");
+
+        beat(user, "steady-1", orderId);   // the ordinary beat, re-stating what it is obeying
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopAckedAt").value(first));
+    }
+
+    /**
+     * AN EXPIRED ORDER CANNOT BE ACKNOWLEDGED. It is not in force, so a machine reporting that it obeyed it
+     * is telling us about a decision we have since let lapse — stale news, and the same treatment a stale
+     * order id already gets.
+     */
+    @Test
+    void anExpiredOrderCannotBeAcknowledged() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "expired-1");
+        order(user, "SIGN_OUT");
+        String orderId = beat(user, "expired-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+
+        // Age the order past its window rather than waiting ten minutes for it.
+        var stored = orderRows.findById(user).orElseThrow();
+        org.springframework.test.util.ReflectionTestUtils.setField(stored, "orderedAt",
+                Instant.now().minus(java.time.Duration.ofMinutes(11)));
+        orderRows.save(stored);
+
+        beat(user, "expired-1", orderId);
+
+        assertThat(devices.findByUserIdAndDeviceId(user, "expired-1").orElseThrow().getStopAckedOrderId())
+                .as("nothing was in force to obey")
+                .isNull();
+    }
+
+    /**
+     * A MACHINE THAT HAS JUST REGISTERED IS NOT SHUT DOWN.
+     *
+     * <p>Registration is what a client does the moment it relaunches, and it was the one call site that did
+     * not clear the goodbye. Between launch and the first sixty-second beat the console showed a single row
+     * saying three contradictory things at once: OFFLINE, "seen just now", and "closed cleanly a minute ago".
+     */
+    @Test
+    void registeringAgainClearsAnEarlierGoodbye() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "relaunch-1");
+
+        mvc.perform(post("/enduser/v1/internal/users/{id}/devices/goodbye", user).header(KEY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"relaunch-1\"}"))
+                .andExpect(status().is2xxSuccessful());
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].shutdownAt").exists());
+
+        register(user, "relaunch-1");   // the app relaunches
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].shutdownAt").doesNotExist());
     }
 }
