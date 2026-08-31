@@ -32,7 +32,7 @@ public class DeviceController {
 
     @PostMapping
     public DeviceResponse register(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody RegisterDeviceRequest req) {
-        return DeviceResponse.of(devices.register(userId(jwt), req.deviceId(), req.platform()));
+        return DeviceResponse.of(devices.register(userId(jwt), req.deviceId(), req.platform(), req.deviceName()));
     }
 
     @GetMapping
