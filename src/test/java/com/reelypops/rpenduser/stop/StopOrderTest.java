@@ -193,6 +193,58 @@ class StopOrderTest {
                 .andExpect(jsonPath("$[0].stopAckedAt").exists());
     }
 
+    /**
+     * THE QUESTION AN OPERATOR ACTUALLY HAS AFTER PRESSING STOP: did it land?
+     *
+     * <p>"Ordered" is the half they already know. What they cannot see without this is that one machine has
+     * obeyed and another — closed at the time — has not.
+     */
+    @Test
+    void theAdminViewSeparatesSTOPPEDfromSTOPPENDING() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "landed-1");
+        register(user, "closed-1");
+        order(user, "KILL");
+
+        String orderId = beat(user, "landed-1", null).andReturn().getResponse().getContentAsString()
+                .replaceAll(".*\"orderId\":\"([^\"]+)\".*", "$1");
+        beat(user, "landed-1", orderId);          // this one obeyed; "closed-1" never checked in
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.deviceId=='landed-1')].stopPending").value(org.hamcrest.Matchers.contains(false)))
+                .andExpect(jsonPath("$[?(@.deviceId=='closed-1')].stopPending").value(org.hamcrest.Matchers.contains(true)))
+                .andExpect(jsonPath("$[?(@.deviceId=='closed-1')].stopAction").value(org.hamcrest.Matchers.contains("KILL")));
+    }
+
+    /** No order means nothing pending — the ordinary case, and it must not read as a stop. */
+    @Test
+    void aUserWithNoOrderHasNothingPENDING() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "calm-1");
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].stopPending").value(false))
+                .andExpect(jsonPath("$[0].stopAction").doesNotExist());
+    }
+
+    /** Clearing the order clears the pending state too — a lifted stop must not still read as outstanding. */
+    @Test
+    void clearingAnOrderStopsItReadingAsPending() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "lift-1");
+        order(user, "KILL");
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopPending").value(true));
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].stopPending").value(false));
+    }
+
     @Test
     void theStopSurfaceIsKeyAuthed() throws Exception {
         mvc.perform(post("/enduser/v1/internal/users/{id}/stop-order", UUID.randomUUID())

@@ -30,13 +30,28 @@ import java.time.Instant;
 public record AdminDeviceView(String deviceId, String platform, String deviceName,
                               DeviceService.Presence presence, Instant firstSeenAt, Instant lastSeenAt,
                               Instant shutdownAt, String focusedHandle, Instant focusedHandleAt,
-                              String appVersion, String stopAckedOrderId, Instant stopAckedAt) {
+                              String appVersion, String stopAckedOrderId, Instant stopAckedAt,
+                              String stopAction, boolean stopPending) {
 
     static AdminDeviceView of(Device device, DeviceService.Presence presence) {
+        return of(device, presence, null, null);
+    }
+
+    /**
+     * @param liveOrderId the user's outstanding stop order, or {@code null} when there is none
+     */
+    static AdminDeviceView of(Device device, DeviceService.Presence presence,
+                              String liveOrderId, String liveAction) {
         return new AdminDeviceView(device.getDeviceId(), device.getPlatform(), device.getDeviceName(),
                 presence, device.getFirstSeenAt(), device.getLastSeenAt(), device.getShutdownAt(),
                 device.getFocusedHandle(), device.getFocusedHandleAt(), device.getAppVersion(),
                 device.getStopAckedOrderId() == null ? null : device.getStopAckedOrderId().toString(),
-                device.getStopAckedAt());
+                device.getStopAckedAt(),
+                liveAction,
+                // PENDING = there is an order and THIS machine has not acknowledged THIS one. Computed here
+                // because this is the only place that holds both halves; asking the console to compare an
+                // order id against an ack would put a rule in the surface that renders it.
+                liveOrderId != null && !liveOrderId.equals(
+                        device.getStopAckedOrderId() == null ? null : device.getStopAckedOrderId().toString()));
     }
 }
