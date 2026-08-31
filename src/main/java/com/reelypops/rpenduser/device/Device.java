@@ -166,6 +166,11 @@ public class Device {
     public void heartbeat(String platform) {
         this.platform = platform;
         this.lastSeenAt = Instant.now();
+        // ANYTHING HEARD FROM IS NOT SHUT DOWN — the rule stated on checkIn below, and this was the call
+        // site that was forgotten. Registration is what a client does the moment it relaunches, so between
+        // launch and its first sixty-second beat the console showed one row saying three contradictory
+        // things at once: OFFLINE, "seen just now", and "closed cleanly a minute ago".
+        this.shutdownAt = null;
     }
 
     /** Record a lightweight M5.1 heartbeat: refresh liveness (online + last-seen). */
@@ -283,6 +288,13 @@ public class Device {
 
     /** This machine has carried out {@code orderId}. */
     public void acknowledgeStop(UUID orderId) {
+        // IDEMPOTENT: re-acknowledging the SAME order must not move the clock. The client re-states what it
+        // is obeying on every ordinary beat so a console that missed the first acknowledgement catches up,
+        // and stamping "now" each time would make "stopped 40m ago" read "just now" for ever — an age that
+        // resets itself is worse than no age at all, because it looks like the stop keeps re-landing.
+        if (orderId != null && orderId.equals(this.stopAckedOrderId)) {
+            return;
+        }
         this.stopAckedOrderId = orderId;
         this.stopAckedAt = Instant.now();
     }

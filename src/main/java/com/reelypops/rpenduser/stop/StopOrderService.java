@@ -143,7 +143,11 @@ public class StopOrderService {
         } catch (IllegalArgumentException malformed) {
             return;
         }
-        boolean current = orders.findById(userId)
+        // THROUGH standingOrder, not the row: an order that has expired is no longer in force, and an
+        // acknowledgement of something not in force is stale news in exactly the way the paragraph above
+        // describes. Reading the row directly let an expired sign-out still be acknowledged, which re-stamped
+        // the device's ack clock with a fresh "now" for an instruction nothing was acting on any more.
+        boolean current = standingOrder(userId, Instant.now())
                 .map(order -> order.getOrderId().equals(acked))
                 .orElse(false);
         if (!current) {

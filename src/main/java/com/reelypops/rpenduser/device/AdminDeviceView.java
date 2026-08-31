@@ -58,6 +58,13 @@ public record AdminDeviceView(String deviceId, String platform, String deviceNam
         // was re-enabled, and had been working happily ever since still carried `stopAckedAt` on the wire —
         // and the console rendered it, in red, for ever. The operator met exactly that: a LIVE machine, seen
         // just now, working a handle, under a badge reading "stopped 39m ago". It was not stopped.
+        //
+        // The id comparison earns its place on the WIRE rather than on today's screen. An escalation —
+        // a machine that obeyed a DISABLE, with a KILL now standing — sets stopPending, so this console
+        // renders "stopping…" and never reaches the landed branch at all. Anyone checking this guard
+        // through the UI will therefore find it apparently dead. It is not: it stops the registry
+        // asserting that a machine obeyed an order it has not heard, which is what protects the next
+        // consumer, and it is the only rule here that a second surface could not re-derive.
         boolean answersTheStandingOrder = liveOrderId != null && liveOrderId.equals(acked);
 
         // AND A SIGN-OUT IS A MOMENT, NOT A STATE. Once a machine has obeyed one there is nothing left to
