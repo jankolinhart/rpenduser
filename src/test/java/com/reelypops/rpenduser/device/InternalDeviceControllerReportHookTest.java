@@ -34,8 +34,10 @@ class InternalDeviceControllerReportHookTest {
     private final ClientVersionService clientVersion = mock(ClientVersionService.class);
     private final DriftForwardingService driftForwarding = mock(DriftForwardingService.class);
     private final MembershipForwardingService membershipForwarding = mock(MembershipForwardingService.class);
+    private final com.reelypops.rpenduser.stop.StopOrderService stopOrders =
+            mock(com.reelypops.rpenduser.stop.StopOrderService.class);
     private final InternalDeviceController controller =
-            new InternalDeviceController(devices, clientVersion, driftForwarding, membershipForwarding);
+            new InternalDeviceController(devices, clientVersion, driftForwarding, membershipForwarding, stopOrders);
 
     private static JsonNode json(String s) {
         try {

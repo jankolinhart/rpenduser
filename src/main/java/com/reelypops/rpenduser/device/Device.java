@@ -132,6 +132,23 @@ public class Device {
     @Column(name = "shutdown_at")
     private Instant shutdownAt;
 
+    /**
+     * The stop order this device last confirmed it had carried out, or {@code null}.
+     *
+     * <p>Recorded as the ORDER's id rather than a bare flag, so a later order is not satisfied by an
+     * earlier acknowledgement — an operator escalating from "finish up" to "stop now" must reach a machine
+     * that already obeyed the first one.
+     *
+     * <p>It is also what lets the console tell a stop that LANDED from one still pending on a machine that
+     * was closed when the order was given. Without it an operator could only be told "ordered", which is
+     * the half of the answer they already knew.
+     */
+    @Column(name = "stop_acked_order_id")
+    private UUID stopAckedOrderId;
+
+    @Column(name = "stop_acked_at")
+    private Instant stopAckedAt;
+
     private Device(UUID userId, String deviceId, String platform) {
         this.id = UUID.randomUUID();
         this.userId = userId;
@@ -254,6 +271,20 @@ public class Device {
     /** The client build last reported, or {@code null} on a machine that has never said. */
     public String getAppVersion() {
         return appVersion;
+    }
+
+    public UUID getStopAckedOrderId() {
+        return stopAckedOrderId;
+    }
+
+    public Instant getStopAckedAt() {
+        return stopAckedAt;
+    }
+
+    /** This machine has carried out {@code orderId}. */
+    public void acknowledgeStop(UUID orderId) {
+        this.stopAckedOrderId = orderId;
+        this.stopAckedAt = Instant.now();
     }
 
     public void applyReport(String report, String stateHash) {

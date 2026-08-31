@@ -30,11 +30,13 @@ import java.time.Instant;
 public record AdminDeviceView(String deviceId, String platform, String deviceName,
                               DeviceService.Presence presence, Instant firstSeenAt, Instant lastSeenAt,
                               Instant shutdownAt, String focusedHandle, Instant focusedHandleAt,
-                              String appVersion) {
+                              String appVersion, String stopAckedOrderId, Instant stopAckedAt) {
 
     static AdminDeviceView of(Device device, DeviceService.Presence presence) {
         return new AdminDeviceView(device.getDeviceId(), device.getPlatform(), device.getDeviceName(),
                 presence, device.getFirstSeenAt(), device.getLastSeenAt(), device.getShutdownAt(),
-                device.getFocusedHandle(), device.getFocusedHandleAt(), device.getAppVersion());
+                device.getFocusedHandle(), device.getFocusedHandleAt(), device.getAppVersion(),
+                device.getStopAckedOrderId() == null ? null : device.getStopAckedOrderId().toString(),
+                device.getStopAckedAt());
     }
 }
