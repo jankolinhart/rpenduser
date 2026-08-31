@@ -51,9 +51,42 @@ class InternalDeviceControllerTest {
                         + "\",\"appVersion\":\"" + appVersion + "\"}"));
     }
 
+    private ResultActions goodbye(UUID user, String deviceId) throws Exception {
+        return mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/goodbye", user).header(KEY_HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"deviceId\":\"" + deviceId + "\"}"));
+    }
+
     private ResultActions report(UUID user, String body) throws Exception {
         return mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/report", user).header(KEY_HEADER, KEY)
                 .contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    @Test
+    void aCleanGoodbyeIsAccepted_andNeedsNoBodyBack() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "bye-d1", "macOS 14.5").andExpect(status().isOk());
+
+        // 204: the client is on its way out and has nothing to do with a reply. It is fire-and-forget on
+        // that side too, because a shutdown must never wait on the network.
+        goodbye(user, "bye-d1").andExpect(status().isNoContent());
+    }
+
+    @Test
+    void aGoodbyeFromANEVERSEENdeviceStillLands() throws Exception {
+        // Upserts like every other device write. A goodbye that beats its own registration — a client that
+        // closed before it ever heartbeated — must not be dropped on the floor.
+        goodbye(UUID.randomUUID(), "bye-unknown").andExpect(status().isNoContent());
+    }
+
+    @Test
+    void aGoodbyeWITHOUTaDeviceIdIsREFUSED() throws Exception {
+        // The fingerprint is the whole body. Without it there is nothing to mark down, and a silent 204
+        // would let a broken client believe it had said goodbye.
+        mockMvc.perform(post("/enduser/v1/internal/users/{userId}/devices/goodbye", UUID.randomUUID())
+                        .header(KEY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

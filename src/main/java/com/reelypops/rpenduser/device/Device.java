@@ -87,6 +87,19 @@ public class Device {
     @Column(name = "focused_handle_at")
     private Instant focusedHandleAt;
 
+    /**
+     * When this client last reported a CLEAN shutdown, or {@code null}.
+     *
+     * <p>A HINT, never the truth. A crash, a power cut or a dead network sends no goodbye, so presence is
+     * still derived from {@link #lastSeenAt}; this only brings the ordinary case forward from "within five
+     * minutes" to "immediately". Treating it as authoritative would let the console show a crashed machine
+     * as running for ever — the failure it exists to remove.
+     *
+     * <p>Cleared by every check-in, so a device that comes back is simply back.
+     */
+    @Column(name = "shutdown_at")
+    private Instant shutdownAt;
+
     private Device(UUID userId, String deviceId, String platform) {
         this.id = UUID.randomUUID();
         this.userId = userId;
@@ -110,6 +123,18 @@ public class Device {
     public void checkIn(boolean online) {
         this.online = online;
         this.lastSeenAt = Instant.now();
+        // Anything heard from is not shut down, whatever it said last time. Clearing here rather than at the
+        // call sites is what keeps "came back" from needing to be handled by every caller separately.
+        this.shutdownAt = null;
+    }
+
+    /** The client said it is closing cleanly. */
+    public void sayGoodbye() {
+        Instant now = Instant.now();
+        this.shutdownAt = now;
+        // Last-seen moves too: this IS the last we heard from it, and leaving it stale would make the age
+        // shown next to the badge older than the event that produced the badge.
+        this.lastSeenAt = now;
     }
 
     /** Store a full M5.1 backward-contract report: its snapshot + fingerprint, refreshing last-report + last-seen. */
@@ -124,6 +149,10 @@ public class Device {
 
     public Instant getFocusedHandleAt() {
         return focusedHandleAt;
+    }
+
+    public Instant getShutdownAt() {
+        return shutdownAt;
     }
 
     /**
