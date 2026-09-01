@@ -1,7 +1,9 @@
 package com.reelypops.rpenduser.stop;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.repository.Repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -19,4 +21,14 @@ public interface StopOrderEventRepository extends Repository<StopOrderEvent, UUI
     List<StopOrderEvent> findByUserIdOrderByOccurredAtDesc(UUID userId);
 
     List<StopOrderEvent> findAllByOrderByOccurredAtDesc();
+
+    /**
+     * A page of history OLDEST FIRST, starting after a watermark.
+     *
+     * <p>Ascending, which looks backwards for a history and is the only ordering a mirror can follow safely.
+     * Newest-first with a limit answers "the last N", so a reader that then advanced its watermark past them
+     * would step over everything older in the same window and never come back for it — and the window only
+     * overflows when a lot is happening at once, which is exactly the moment the record matters.
+     */
+    List<StopOrderEvent> findByOccurredAtGreaterThanOrderByOccurredAtAsc(Instant since, Pageable page);
 }
