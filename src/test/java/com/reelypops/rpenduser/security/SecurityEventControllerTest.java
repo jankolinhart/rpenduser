@@ -1,6 +1,8 @@
 package com.reelypops.rpenduser.security;
 
 import com.reelypops.rpenduser.TestcontainersConfiguration;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -9,6 +11,10 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -111,21 +117,60 @@ class SecurityEventControllerTest {
      */
     @Test
     void everyEventReportsItsActorAsCLAIMED() throws Exception {
-        userWithA("KILL");
+        UUID user = userWithA("KILL");
 
-        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY).param("limit", "500"))
                 .andExpect(jsonPath("$[?(@.actorAuthenticated == true)]").isEmpty())
-                .andExpect(jsonPath("$[0].actor").value("root"))
-                .andExpect(jsonPath("$[0].service").value("rpenduser"));
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].actor")
+                        .value(org.hamcrest.Matchers.hasItem("root")))
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].service")
+                        .value(org.hamcrest.Matchers.hasItem("rpenduser")));
     }
 
     /** The address is the one the load balancer observed, never the one the caller offered. */
     @Test
     void theAddressIsTheOneTheLoadBalancerObserved() throws Exception {
-        userWithA("KILL");
+        UUID user = userWithA("KILL");
 
-        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
-                .andExpect(jsonPath("$[0].sourceIp").value("203.0.113.7"));
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY).param("limit", "500"))
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].sourceIp")
+                        .value(org.hamcrest.Matchers.hasItem("203.0.113.7")));
+    }
+
+    /**
+     * <strong>THE FEED IS DRAINED, NOT SAMPLED.</strong> A page smaller than the burst must return the
+     * OLDEST unseen events, so a reader that keeps a watermark and asks again eventually sees every one.
+     *
+     * <p>Newest-first would return the tail of the burst and let the reader's watermark step over the
+     * middle of it — and a page only overflows when a lot is happening at once, which is precisely when
+     * the record is worth having.
+     */
+    @Test
+    void aBurstBiggerThanOnePageIsDrainedOldestFirstAndNothingIsSkipped() throws Exception {
+        Instant watermark = Instant.now();
+        List<UUID> ordered = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            ordered.add(userWithA("KILL"));
+        }
+
+        List<UUID> drained = new ArrayList<>();
+        String since = watermark.toString();
+        for (int page = 0; page < 5 && drained.size() < ordered.size(); page++) {
+            String body = mvc.perform(get("/enduser/v1/internal/security-events")
+                            .header(KEY_HEADER, KEY).param("since", since).param("limit", "2"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            List<Map<String, Object>> events = new ObjectMapper().readValue(body, new TypeReference<>() {});
+            if (events.isEmpty()) {
+                break;
+            }
+            events.forEach(e -> drained.add(UUID.fromString((String) e.get("subjectUserId"))));
+            since = (String) events.get(events.size() - 1).get("occurredAt");
+        }
+
+        org.assertj.core.api.Assertions.assertThat(drained)
+                .as("every event in the burst, in the order it happened")
+                .containsExactlyElementsOf(ordered);
     }
 
     @Test

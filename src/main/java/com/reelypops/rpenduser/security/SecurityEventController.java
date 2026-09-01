@@ -3,6 +3,7 @@ package com.reelypops.rpenduser.security;
 import com.reelypops.rpenduser.stop.StopAction;
 import com.reelypops.rpenduser.stop.StopOrderEvent;
 import com.reelypops.rpenduser.stop.StopOrderEventRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -16,6 +17,11 @@ import java.util.List;
  *
  * <p>A projection over {@code stop_order_event}, which is append-only — so unlike almost everything else
  * this service reports, what this endpoint returns for a given moment never changes afterwards.
+ *
+ * <p><strong>OLDEST FIRST, from a watermark.</strong> This is a feed to be drained, not a screen to be
+ * read: the caller keeps the newest {@code occurredAt} it has stored and asks for what came after it. A
+ * full page therefore means "ask again straight away", and no amount of activity can push an event past a
+ * reader that is behind. Newest-first would quietly drop the middle of any burst.
  */
 @RestController
 @RequestMapping("/enduser/v1/internal/security-events")
@@ -36,9 +42,9 @@ public class SecurityEventController {
     public List<SecurityEvent> events(@RequestParam(required = false) Instant since,
                                       @RequestParam(required = false, defaultValue = "200") int limit) {
         int size = Math.max(1, Math.min(limit, MAX_PAGE));
-        return history.findAllByOrderByOccurredAtDesc().stream()
-                .filter(row -> since == null || row.getOccurredAt().isAfter(since))
-                .limit(size)
+        Instant from = since == null ? Instant.EPOCH : since;
+        return history.findByOccurredAtGreaterThanOrderByOccurredAtAsc(from, PageRequest.of(0, size))
+                .stream()
                 .map(SecurityEventController::project)
                 .toList();
     }
