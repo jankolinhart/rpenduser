@@ -39,10 +39,13 @@ public class StopOrderService {
 
     private final UserStopOrderRepository orders;
     private final DeviceRepository devices;
+    private final StopOrderEventRepository history;
 
-    public StopOrderService(UserStopOrderRepository orders, DeviceRepository devices) {
+    public StopOrderService(UserStopOrderRepository orders, DeviceRepository devices,
+                            StopOrderEventRepository history) {
         this.orders = orders;
         this.devices = devices;
+        this.history = history;
     }
 
     /**
@@ -63,6 +66,15 @@ public class StopOrderService {
      */
     @Transactional
     public StopDirective order(UUID userId, StopAction action, String orderedBy) {
+        return order(userId, action, orderedBy, null);
+    }
+
+    /**
+     * @param sourceIp where the request came from, for the history. Null when the caller does not know —
+     *                 which is honest, and better than inventing one.
+     */
+    @Transactional
+    public StopDirective order(UUID userId, StopAction action, String orderedBy, String sourceIp) {
         Optional<UserStopOrder> standing = standingOrder(userId, Instant.now());
         if (!action.latches() && standing.filter(o -> o.getAction().latches()).isPresent()) {
             return StopDirective.of(standing.get());
@@ -73,7 +85,11 @@ public class StopOrderService {
                     return existing;
                 })
                 .orElseGet(() -> UserStopOrder.issue(userId, action, orderedBy));
-        return StopDirective.of(orders.save(order));
+        UserStopOrder saved = orders.save(order);
+        // WRITTEN BEFORE THE ORDER CAN BE OVERWRITTEN OR DELETED, and in the same transaction, so a stop
+        // that took effect and a stop that was recorded cannot diverge.
+        history.save(StopOrderEvent.of(saved, StopOrderEvent.Event.ISSUED, orderedBy, sourceIp));
+        return StopDirective.of(saved);
     }
 
     /**
@@ -84,9 +100,28 @@ public class StopOrderService {
      * handle, and a "nothing to do" that read as a failure would be a reason not to retry the one operation
      * that must always succeed.
      */
+    /**
+     * Let this user's machines work again — and RECORD THAT IT HAPPENED.
+     *
+     * <p>The delete below used to be the whole method, which meant the Enable button destroyed the only
+     * evidence of what it was undoing. In the scenario this observability work exists for — a stop issued
+     * out-of-band with a stolen key — <strong>the recovery action was what erased the trace of the
+     * attack.</strong>
+     *
+     * <p>The event is written FIRST, from the order about to be deleted, so nothing is lost if the delete
+     * and the write ever stop sharing a transaction.
+     */
     @Transactional
-    public void clear(UUID userId) {
+    public void clear(UUID userId, String clearedBy, String sourceIp) {
+        orders.findById(userId).ifPresent(order ->
+                history.save(StopOrderEvent.of(order, StopOrderEvent.Event.CLEARED, clearedBy, sourceIp)));
         orders.deleteById(userId);
+    }
+
+    /** The history for one user, newest first. Read-only, and it outlives every order it describes. */
+    @Transactional(readOnly = true)
+    public java.util.List<StopOrderEvent> historyFor(UUID userId) {
+        return history.findByUserIdOrderByOccurredAtDesc(userId);
     }
 
     /**

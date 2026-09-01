@@ -43,6 +43,7 @@ class StopOrderTest {
     @Autowired StopOrderService stopOrders;
     @Autowired com.reelypops.rpenduser.device.DeviceRepository devices;
     @Autowired UserStopOrderRepository orderRows;
+    @Autowired StopOrderEventRepository stopHistory;
 
     /** Backdate a machine's last check-in, so "closed for weeks" can be tested without waiting weeks. */
     private void lastSeen(UUID user, String deviceId, java.time.Duration ago) {
@@ -650,5 +651,141 @@ class StopOrderTest {
 
         mvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
                 .andExpect(jsonPath("$[0].shutdownAt").doesNotExist());
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // THE HISTORY OUTLIVES THE ORDER
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * <strong>ENABLE NO LONGER DESTROYS THE EVIDENCE OF WHAT IT IS UNDOING.</strong>
+     *
+     * <p>{@code user_stop_order} is one mutable row per user, and {@code clear()} deleted it. So the act of
+     * putting a customer back to work erased the only record of what had been done to them and by whom.
+     *
+     * <p>In the scenario this whole observability effort exists for — a stop issued out-of-band with a
+     * stolen key — the RECOVERY action was what wiped the trace of the attack.
+     */
+    @Test
+    void clearingAnOrderKeepsTheHistoryOfIt() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-1");
+        order(user, "KILL");
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user))
+                .as("issued and cleared, both kept, after the order row itself is gone")
+                .hasSize(2)
+                .extracting(StopOrderEvent::getEvent)
+                .containsExactly(StopOrderEvent.Event.CLEARED, StopOrderEvent.Event.ISSUED);
+        assertThat(orderRows.findById(user)).as("the order itself IS gone — only the history remains").isEmpty();
+    }
+
+    /**
+     * AND AN ESCALATION KEEPS BOTH. Re-issuing overwrites the order row in place, so without this a
+     * DISABLE that was later escalated to a KILL left no trace it had ever been given — and "when did this
+     * customer first get stopped" had no answer.
+     */
+    @Test
+    void escalatingKeepsTheOrderItReplaced() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-2");
+        order(user, "DISABLE");
+        order(user, "KILL");
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user))
+                .extracting(StopOrderEvent::getAction)
+                .containsExactly(StopAction.KILL, StopAction.DISABLE);
+    }
+
+    /** Every event names the order it belongs to, so a history can be read back as a sequence. */
+    @Test
+    void everyEventNamesTheOrderItDescribes() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-3");
+        order(user, "DISABLE");
+        UUID issued = orderRows.findById(user).orElseThrow().getOrderId();
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user))
+                .allSatisfy(event -> assertThat(event.getOrderId()).isEqualTo(issued));
+    }
+
+    /**
+     * THE CALLER'S LABEL IS RECORDED AS CLAIMED, and the field is named so. Nothing verifies it — this
+     * surface is authenticated by a shared key with no per-caller identity — so a column called
+     * "orderedBy" would invite a reader to treat a typed string as established.
+     */
+    @Test
+    void theCallersLabelIsRecordedButNamedAsAClaim() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-4");
+        order(user, "DISABLE");
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user))
+                .first()
+                .satisfies(event -> assertThat(event.getClaimedBy()).isEqualTo("root"));
+    }
+
+    /** Clearing something that was never ordered records nothing — there is no event to describe. */
+    @Test
+    void clearingNothingRecordsNothing() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-5");
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user)).isEmpty();
+    }
+
+    /**
+     * THE ADDRESS RECORDED IS THE LAST FORWARDED HOP. An ALB appends the real client to whatever the caller
+     * supplied, so the first entry is whatever they chose to send — and four copies across the estate took
+     * that entry, precisely because it is the obvious way to write it.
+     */
+    @Test
+    void theHistoryRecordsTheAddressTheLoadBalancerObservedNotTheOneTheCallerClaimed() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-6");
+
+        mvc.perform(post("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY)
+                        .header("X-Forwarded-For", "8.8.8.8, 203.0.113.7")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"KILL\",\"orderedBy\":\"root\"}"))
+                .andExpect(status().isOk());
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user))
+                .first()
+                .satisfies(event -> assertThat(event.getSourceIp()).isEqualTo("203.0.113.7"));
+    }
+
+    /** With no forwarded header the socket's own peer is the honest answer, not a blank. */
+    @Test
+    void withoutAForwardedHeaderTheSocketAddressIsRecorded() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-7");
+        order(user, "DISABLE");
+
+        assertThat(stopHistory.findByUserIdOrderByOccurredAtDesc(user))
+                .first()
+                .satisfies(event -> assertThat(event.getSourceIp()).isNotBlank());
+    }
+
+    /** The read path the console will use, newest first. */
+    @Test
+    void theHistoryReadsBackNewestFirst() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "history-8");
+        order(user, "DISABLE");
+        order(user, "KILL");
+
+        assertThat(stopOrders.historyFor(user))
+                .extracting(StopOrderEvent::getAction)
+                .containsExactly(StopAction.KILL, StopAction.DISABLE);
     }
 }
