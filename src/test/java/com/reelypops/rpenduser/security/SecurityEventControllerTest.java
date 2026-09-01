@@ -1,0 +1,136 @@
+package com.reelypops.rpenduser.security;
+
+import com.reelypops.rpenduser.TestcontainersConfiguration;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.util.UUID;
+
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * rpenduser's stop history, READ AS SECURITY EVENTS.
+ *
+ * <p>Same shape rpauth speaks, so the console mirrors one vocabulary rather than growing a translation
+ * layer per service — which is a thing to forget to update when the third service arrives.
+ */
+@SpringBootTest(properties = "rp.internal.api-key=test-internal-key")
+@AutoConfigureMockMvc
+@Import(TestcontainersConfiguration.class)
+class SecurityEventControllerTest {
+
+    private static final String KEY_HEADER = "X-Internal-Api-Key";
+    private static final String KEY = "test-internal-key";
+
+    @Autowired MockMvc mvc;
+
+    private UUID userWithA(String action) throws Exception {
+        UUID user = UUID.randomUUID();
+        mvc.perform(post("/enduser/v1/devices").with(jwt().jwt(j -> j.subject(user.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"sec-" + UUID.randomUUID() + "\",\"platform\":\"macOS\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY)
+                        .header("X-Forwarded-For", "8.8.8.8, 203.0.113.7")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"" + action + "\",\"orderedBy\":\"root\"}"))
+                .andExpect(status().isOk());
+        return user;
+    }
+
+    /**
+     * <strong>THE TYPE CARRIES THE ACTION.</strong> "A stop was issued" and "a KILL was issued" are
+     * different sentences to an operator, and the alerting reads the type — so collapsing them would make
+     * it impossible to treat a fleet-halting kill differently from a routine disable.
+     */
+    @Test
+    void aKillIsReportedAsAKillAndIsRed() throws Exception {
+        UUID user = userWithA("KILL");
+
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].type")
+                        .value(org.hamcrest.Matchers.hasItem("STOP_ORDER_ISSUED_KILL")))
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].severity")
+                        .value(org.hamcrest.Matchers.hasItem("RED")));
+    }
+
+    /**
+     * A DISABLE IS AMBER, not red. It is routine enough — billing, a cancellation, somebody leaving — that
+     * a red alert on it would fire during ordinary admin work, and a red channel that fires during ordinary
+     * work stops being read.
+     */
+    @Test
+    void aDisableIsAmberBecauseItIsRoutine() throws Exception {
+        UUID user = userWithA("DISABLE");
+
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].severity")
+                        .value(org.hamcrest.Matchers.hasItem("AMBER")));
+    }
+
+    /** A sign-out stops nothing, so it is the record and never an alarm. */
+    @Test
+    void aSignOutIsInfoBecauseItStopsNothing() throws Exception {
+        UUID user = userWithA("SIGN_OUT");
+
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].severity")
+                        .value(org.hamcrest.Matchers.hasItem("INFO")));
+    }
+
+    /** CLEARING is a recovery, and a recovery is never an alarm — but it is always the record. */
+    @Test
+    void clearingIsRecordedAsInfoRatherThanAsAnAlarm() throws Exception {
+        UUID user = userWithA("KILL");
+
+        mvc.perform(delete("/enduser/v1/internal/users/{id}/stop-order", user).header(KEY_HEADER, KEY))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + user + "')].type")
+                        .value(org.hamcrest.Matchers.hasItem("STOP_ORDER_CLEARED_KILL")))
+                .andExpect(jsonPath("$[?(@.type == 'STOP_ORDER_CLEARED_KILL')].severity")
+                        .value(org.hamcrest.Matchers.hasItem("INFO")));
+    }
+
+    /**
+     * <strong>NOTHING HERE CLAIMS AN AUTHENTICATED ACTOR.</strong> This surface is a shared key with no
+     * per-caller identity, so the label is a string somebody typed — and the console must be able to render
+     * it differently from one that was proved.
+     */
+    @Test
+    void everyEventReportsItsActorAsCLAIMED() throws Exception {
+        userWithA("KILL");
+
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[?(@.actorAuthenticated == true)]").isEmpty())
+                .andExpect(jsonPath("$[0].actor").value("root"))
+                .andExpect(jsonPath("$[0].service").value("rpenduser"));
+    }
+
+    /** The address is the one the load balancer observed, never the one the caller offered. */
+    @Test
+    void theAddressIsTheOneTheLoadBalancerObserved() throws Exception {
+        userWithA("KILL");
+
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].sourceIp").value("203.0.113.7"));
+    }
+
+    @Test
+    void theSurfaceIsKeyAuthed() throws Exception {
+        mvc.perform(get("/enduser/v1/internal/security-events"))
+                .andExpect(status().isUnauthorized());
+    }
+}
