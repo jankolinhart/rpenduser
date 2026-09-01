@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
@@ -34,8 +35,9 @@ public class AdminStopOrderController {
 
     /** Tell this user's machines to stop. Re-issuing gets a new id, so a machine obeys again. */
     @PostMapping("/users/{userId}/stop-order")
-    public StopDirective order(@PathVariable UUID userId, @RequestBody StopOrderRequest request) {
-        return stopOrders.order(userId, request.action(), request.orderedBy());
+    public StopDirective order(@PathVariable UUID userId, @RequestBody StopOrderRequest request,
+                               jakarta.servlet.http.HttpServletRequest http) {
+        return stopOrders.order(userId, request.action(), request.orderedBy(), sourceIp(http));
     }
 
     /**
@@ -49,8 +51,27 @@ public class AdminStopOrderController {
      * lifting is less reliable than issuing is a plan for leaving customers stopped.
      */
     @DeleteMapping("/users/{userId}/stop-order")
-    public ResponseEntity<Void> clear(@PathVariable UUID userId) {
-        stopOrders.clear(userId);
+    public ResponseEntity<Void> clear(@PathVariable UUID userId,
+                                      @RequestParam(required = false) String clearedBy,
+                                      jakarta.servlet.http.HttpServletRequest http) {
+        stopOrders.clear(userId, clearedBy, sourceIp(http));
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Where the call came from, as best this service can tell.
+     *
+     * <p>The LAST forwarded hop, because an ALB appends the real client to whatever the caller supplied —
+     * so the first entry is whatever the caller chose. Same rule as everywhere else in the estate since
+     * 01/09/2026, and the reason it is worth repeating in a comment is that four separate copies took the
+     * first entry precisely because that is the obvious way to write it.
+     */
+    private static String sourceIp(jakarta.servlet.http.HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded == null || forwarded.isBlank()) {
+            return request.getRemoteAddr();
+        }
+        String[] hops = forwarded.split(",");
+        return hops[hops.length - 1].trim();
     }
 }
