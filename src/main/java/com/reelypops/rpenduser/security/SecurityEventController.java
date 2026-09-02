@@ -38,15 +38,43 @@ public class SecurityEventController {
         this.history = history;
     }
 
+    /**
+     * @param until optional upper bound, for a reader RE-READING a window it has already passed. The drain
+     *              only moves forward; repair has to go back, and has to terminate.
+     */
     @GetMapping
     public List<SecurityEvent> events(@RequestParam(required = false) Instant since,
+                                      @RequestParam(required = false) Instant until,
                                       @RequestParam(required = false, defaultValue = "200") int limit) {
         int size = Math.max(1, Math.min(limit, MAX_PAGE));
         Instant from = since == null ? Instant.EPOCH : since;
-        return history.findByOccurredAtGreaterThanOrderByOccurredAtAsc(from, PageRequest.of(0, size))
-                .stream()
-                .map(SecurityEventController::project)
-                .toList();
+        List<StopOrderEvent> rows = until == null
+                ? history.findByOccurredAtGreaterThanOrderByOccurredAtAsc(from, PageRequest.of(0, size))
+                : history.findByOccurredAtGreaterThanAndOccurredAtLessThanEqualOrderByOccurredAtAsc(
+                        from, until, PageRequest.of(0, size));
+        return rows.stream().map(SecurityEventController::project).toList();
+    }
+
+    /**
+     * HOW MANY EVENTS THIS SERVICE HOLDS IN A WINDOW.
+     *
+     * <p>The mirror cannot detect its own gaps. It pages forward from a watermark derived from what it has
+     * already stored, so a row landing below that watermark — a clock stepping backwards, two instances
+     * whose clocks differ, a restore — is stepped over permanently while every read reports success. That
+     * is a silent hole in the security record behind a screen saying every feed is reporting.
+     *
+     * <p>A count over a settled window is the cheapest question whose answer differs when rows are lost.
+     *
+     * @param since exclusive lower bound
+     * @param until inclusive upper bound. Both required — an unbounded count answers a question nobody asked.
+     */
+    @GetMapping("/count")
+    public Count count(@RequestParam Instant since, @RequestParam Instant until) {
+        return new Count(history.countByOccurredAtGreaterThanAndOccurredAtLessThanEqual(since, until));
+    }
+
+    /** @param count how many events fall in the requested window */
+    public record Count(long count) {
     }
 
     /**
