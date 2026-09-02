@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -177,5 +178,68 @@ class SecurityEventControllerTest {
     void theSurfaceIsKeyAuthed() throws Exception {
         mvc.perform(get("/enduser/v1/internal/security-events"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * THE COUNT EXISTS BECAUSE A DRAIN CANNOT DETECT ITS OWN GAPS.
+     *
+     * <p>The mirror pages forward from a watermark derived from what it has already stored, so a row
+     * landing below that watermark — a clock stepping backwards, a restore, two instances disagreeing — is
+     * stepped over for ever while every read reports success. Comparing this count with the mirror's own
+     * over a settled window is the only cheap question whose answer differs when rows have been lost.
+     */
+    @Test
+    void countsWhatThisServiceHoldsInAWindow() throws Exception {
+        userWithA("KILL");
+        userWithA("DISABLE");
+
+        mvc.perform(get("/enduser/v1/internal/security-events/count").header(KEY_HEADER, KEY)
+                        .param("since", Instant.now().minus(Duration.ofHours(1)).toString())
+                        .param("until", Instant.now().plus(Duration.ofMinutes(1)).toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(org.hamcrest.Matchers.greaterThanOrEqualTo(2)));
+    }
+
+    @Test
+    void countsNothingOutsideTheWindow() throws Exception {
+        userWithA("KILL");
+
+        mvc.perform(get("/enduser/v1/internal/security-events/count").header(KEY_HEADER, KEY)
+                        .param("since", Instant.now().minus(Duration.ofDays(9)).toString())
+                        .param("until", Instant.now().minus(Duration.ofDays(8)).toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(0));
+    }
+
+    @Test
+    void theCountIsBehindTheSameKeyAsTheFeed() throws Exception {
+        mvc.perform(get("/enduser/v1/internal/security-events/count")
+                        .param("since", Instant.now().minus(Duration.ofHours(1)).toString())
+                        .param("until", Instant.now().toString()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * REPAIR HAS TO BE ABLE TO GO BACK, AND HAS TO TERMINATE. The drain only moves forward from a
+     * watermark; a reader that has found a hole needs a bounded re-read of a span it already passed.
+     */
+    @Test
+    void readsAClosedWindowForARepair() throws Exception {
+        UUID before = userWithA("KILL");
+        Thread.sleep(10);
+        Instant boundary = Instant.now();
+        Thread.sleep(10);
+        UUID after = userWithA("DISABLE");
+
+        // SCOPED TO THIS TEST'S OWN SUBJECTS. The feed is drained from a shared database, so an unscoped
+        // "no DISABLE in this window" asserts something about every other test in the class — which is how
+        // the rpauth equivalent of this assertion failed in CI on 02/09/2026.
+        mvc.perform(get("/enduser/v1/internal/security-events").header(KEY_HEADER, KEY)
+                        .param("since", Instant.now().minus(Duration.ofHours(1)).toString())
+                        .param("until", boundary.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + before + "')]").isNotEmpty())
+                // …and the read stops at the bound rather than running on to the present.
+                .andExpect(jsonPath("$[?(@.subjectUserId == '" + after + "')]").isEmpty());
     }
 }

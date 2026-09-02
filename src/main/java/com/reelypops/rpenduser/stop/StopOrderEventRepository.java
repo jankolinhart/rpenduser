@@ -31,4 +31,20 @@ public interface StopOrderEventRepository extends Repository<StopOrderEvent, UUI
      * overflows when a lot is happening at once, which is exactly the moment the record matters.
      */
     List<StopOrderEvent> findByOccurredAtGreaterThanOrderByOccurredAtAsc(Instant since, Pageable page);
+
+    /**
+     * A CLOSED WINDOW, for a reader that wants to REPAIR rather than to advance. The drain above only moves
+     * forward from a watermark; a reader that has found a hole has to be able to go back, and the read has
+     * to terminate.
+     */
+    List<StopOrderEvent> findByOccurredAtGreaterThanAndOccurredAtLessThanEqualOrderByOccurredAtAsc(
+            Instant since, Instant until, Pageable page);
+
+    /**
+     * HOW MANY WE HOLD IN A WINDOW — the number a reader compares against its own to learn it is missing
+     * something. A drain cannot detect its own gaps: it pages forward from a watermark derived from what it
+     * already stored, so anything it stepped over is invisible to it for ever while every read reports
+     * success.
+     */
+    long countByOccurredAtGreaterThanAndOccurredAtLessThanEqual(Instant since, Instant until);
 }
