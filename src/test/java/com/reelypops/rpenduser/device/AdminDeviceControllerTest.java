@@ -116,6 +116,46 @@ class AdminDeviceControllerTest {
                 .andExpect(jsonPath("$[0].appVersion").value("1.4.2"));
     }
 
+    private void heartbeatSaying(UUID user, String deviceId, String windowSignedIn) throws Exception {
+        String window = windowSignedIn == null ? "" : ",\"windowSignedIn\":" + windowSignedIn;
+        mockMvc.perform(post("/enduser/v1/internal/users/{id}/devices/heartbeat", user).header(KEY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"" + deviceId + "\",\"online\":true,\"stateHash\":\"h\"" + window + "}"))
+                .andExpect(status().isOk());
+    }
+
+    /**
+     * <strong>WHETHER SOMEBODY IS SIGNED IN AT THE MACHINE</strong> (11/09/2026). A computer works for its account
+     * whether or not anybody is signed in to its window, so the console asks the machine itself — as of its last
+     * beat, both ways.
+     */
+    @Test
+    void aDeviceSaysWhetherItsWindowIsSignedIn() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "adm-window", "macOS 14.5");
+
+        heartbeatSaying(user, "adm-window", "true");
+        mockMvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].windowSignedIn").value(true));
+
+        heartbeatSaying(user, "adm-window", "false");
+        mockMvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].windowSignedIn").value(false));
+    }
+
+    /** A client that does not say is not read as signed out: the field is absent, never false. */
+    @Test
+    void aClientThatDoesNotSaySaysNothing() throws Exception {
+        UUID user = UUID.randomUUID();
+        register(user, "adm-window-old", "macOS 14.5");
+        heartbeatSaying(user, "adm-window-old", "true");
+
+        heartbeatSaying(user, "adm-window-old", null);
+
+        mockMvc.perform(get("/enduser/v1/internal/users/{id}/devices", user).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].windowSignedIn").doesNotExist());
+    }
+
     @Test
     void aGoodbyeIsShownAsOfflineWithTheStampThatExplainsIt() throws Exception {
         // OFFLINE arriving early is only trustworthy if the console can see WHY. Absence explains nothing,

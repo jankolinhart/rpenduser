@@ -13,7 +13,13 @@ import jakarta.validation.constraints.NotBlank;
  * <p>It also carries {@code deviceName}, which is what makes the beat the RENAME path: the label rides the
  * call that already runs every 60s, so there is no rename endpoint and no second path to fall out of sync.
  * Optional like {@code appVersion}, and absent means "no opinion" rather than "clear it".
+ *
+ * <p>And {@code windowSignedIn} (11/09/2026): whether somebody is signed in to the app's window right now. The
+ * computer works for its account either way — the sign-in only locks the window — so this is the one way the
+ * console can tell a machine somebody is using from one working on its own. {@code null} from a client that
+ * predates it.
  */
 public record HeartbeatRequest(@NotBlank String deviceId, boolean online, @NotBlank String stateHash,
-                               String appVersion, String deviceName, String ackStopOrderId) {
+                               String appVersion, String deviceName, String ackStopOrderId,
+                               Boolean windowSignedIn) {
 }

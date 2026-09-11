@@ -22,6 +22,8 @@ import java.time.Instant;
  * @param focusedHandle the Instagram account this machine is working, or {@code null}. With the presence
  *                   band beside it this is what turns "the user says nothing is happening" into an answer.
  * @param appVersion the client build it last reported, or {@code null}.
+ * @param windowSignedIn whether somebody was signed in to the app's window at the last heartbeat, or {@code null}
+ *                   when the client does not say. The machine works for its account either way.
  *
  * <p>The {@code online} flag the registry also stores is deliberately NOT here. It is a Google-204
  * reachability probe rather than client liveness, and sitting in a column called "online" next to a
@@ -31,7 +33,7 @@ public record AdminDeviceView(String deviceId, String platform, String deviceNam
                               DeviceService.Presence presence, Instant firstSeenAt, Instant lastSeenAt,
                               Instant shutdownAt, String focusedHandle, Instant focusedHandleAt,
                               String appVersion, String stopAckedOrderId, Instant stopAckedAt,
-                              String stopAction, boolean stopPending) {
+                              String stopAction, boolean stopPending, Boolean windowSignedIn) {
 
     static AdminDeviceView of(Device device, DeviceService.Presence presence) {
         return of(device, presence, null, Instant.now());
@@ -96,6 +98,6 @@ public record AdminDeviceView(String deviceId, String platform, String deviceNam
                 worthReportingAfterwards ? acked : null,
                 worthReportingAfterwards ? device.getStopAckedAt() : null,
                 standing == null ? null : standing.getAction().name(),
-                pending);
+                pending, device.getWindowSignedIn());
     }
 }

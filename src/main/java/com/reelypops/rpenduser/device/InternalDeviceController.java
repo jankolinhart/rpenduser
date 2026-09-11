@@ -57,7 +57,7 @@ public class InternalDeviceController {
     @PostMapping("/users/{userId}/devices/heartbeat")
     public HeartbeatResponse heartbeat(@PathVariable UUID userId, @Valid @RequestBody HeartbeatRequest req) {
         boolean reportNeeded = devices.heartbeat(userId, req.deviceId(), req.online(), req.stateHash(), req.deviceName(),
-                req.appVersion());
+                req.appVersion(), req.windowSignedIn());
         boolean updateAvailable = clientVersion.updateAvailable(req.appVersion());
         // The acknowledgement answers "did it land" for the console; it does NOT silence the directive.
         // An outstanding order keeps being sent so that silence can mean one thing only — no order — and

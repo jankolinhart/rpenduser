@@ -29,3 +29,6 @@ databaseChangeLog:
   - include:
       file: changes/010-stop-order-event.sql
       relativeToChangelogFile: true
+  - include:
+      file: changes/011-window-signed-in.sql
+      relativeToChangelogFile: true

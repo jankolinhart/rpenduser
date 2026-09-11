@@ -52,9 +52,16 @@ public class DeviceService {
     @Transactional
     public boolean heartbeat(UUID userId, String deviceId, boolean online, String stateHash, String deviceName,
                              String appVersion) {
+        return heartbeat(userId, deviceId, online, stateHash, deviceName, appVersion, null);
+    }
+
+    /** As above, and whether the app's window is signed in ({@code null}: the client does not say). */
+    @Transactional
+    public boolean heartbeat(UUID userId, String deviceId, boolean online, String stateHash, String deviceName,
+                             String appVersion, Boolean windowSignedIn) {
         Device device = devices.findByUserIdAndDeviceId(userId, deviceId)
                 .orElseGet(() -> Device.register(userId, deviceId, null));
-        device.checkIn(online, appVersion);
+        device.checkIn(online, appVersion, windowSignedIn);
         // A rename rides the heartbeat rather than an endpoint of its own, so this is where a new name lands
         // — within one beat of the user pressing Save, with no second path to fall out of sync.
         device.nameThisMachine(deviceName);
