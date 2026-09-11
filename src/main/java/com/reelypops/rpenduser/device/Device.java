@@ -68,6 +68,14 @@ public class Device {
     @Column(name = "app_version")
     private String appVersion;
 
+    /**
+     * Whether the app's window was signed in at the last heartbeat, or {@code null} when the client does not say.
+     * Written on every beat — unlike {@link #appVersion} this is a state that changes, so "as of the last beat" is
+     * the truth, and a client that stops saying it has stopped knowing it.
+     */
+    @Column(name = "window_signed_in")
+    private Boolean windowSignedIn;
+
     @CreationTimestamp
     @Column(name = "first_seen_at", nullable = false, updatable = false)
     private Instant firstSeenAt;
@@ -171,6 +179,16 @@ public class Device {
         // launch and its first sixty-second beat the console showed one row saying three contradictory
         // things at once: OFFLINE, "seen just now", and "closed cleanly a minute ago".
         this.shutdownAt = null;
+    }
+
+    /** A heartbeat that also says whether the window is signed in ({@code null}: the client does not say). */
+    public void checkIn(boolean online, String appVersion, Boolean windowSignedIn) {
+        this.windowSignedIn = windowSignedIn;
+        checkIn(online, appVersion);
+    }
+
+    public Boolean getWindowSignedIn() {
+        return windowSignedIn;
     }
 
     /** Record a lightweight M5.1 heartbeat: refresh liveness (online + last-seen). */
