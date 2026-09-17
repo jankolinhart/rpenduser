@@ -63,4 +63,19 @@ public class InternalInstagramAccountController {
     public List<InstagramAccountView> held(@PathVariable UUID userId) {
         return accounts.heldBy(userId).stream().map(InstagramAccountView::of).toList();
     }
+
+    /**
+     * <strong>WHAT A MACHINE MUST UNDO</strong> — every account this customer has released and not re-taken.
+     *
+     * <p>A client that has been away cannot learn this by comparing what it holds against {@link #held}: a
+     * handle missing from there might have been released, and might equally be one this service has never
+     * been told about. Absent is not released, which is the rule these marks exist to enforce.
+     *
+     * <p>200 with an empty array when there is nothing to undo — the ordinary answer, and one a client must
+     * be able to tell apart from a failure.
+     */
+    @GetMapping("/released")
+    public List<ReleasedInstagramAccount> released(@PathVariable UUID userId) {
+        return accounts.releasedBy(userId).stream().map(ReleasedInstagramAccount::of).toList();
+    }
 }

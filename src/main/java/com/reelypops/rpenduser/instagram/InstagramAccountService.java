@@ -22,6 +22,12 @@ import java.util.UUID;
  * InstagramAccount#getClaimedAt()}: the date it became theirs has not changed, and moving it would make
  * "since when" answer the wrong question on every screen that asks.
  *
+ * <h2>A release leaves a mark, because a deleted row says nothing</h2>
+ * Releasing deletes the claim AND writes an {@link InstagramAccountRelease}. Without it a customer who
+ * removed an account from the Seat Map freed the slot here while the account carried on existing on the
+ * computer it was set up on, and nothing anywhere could reconcile the two. Claiming removes the mark:
+ * re-adding an account they had given up must stop the machines undoing it.
+ *
  * <h2>Releasing is a deliberate act, and the only way a row goes</h2>
  * Nothing here is written or removed from a device report. rpsupportgroup settled the same question for
  * memberships and the rule is the same: a report is what a client SAW, and absence in it is not a removal. A
@@ -31,9 +37,12 @@ import java.util.UUID;
 public class InstagramAccountService {
 
     private final InstagramAccountRepository accounts;
+    private final InstagramAccountReleaseRepository releases;
 
-    public InstagramAccountService(InstagramAccountRepository accounts) {
+    public InstagramAccountService(InstagramAccountRepository accounts,
+                                   InstagramAccountReleaseRepository releases) {
         this.accounts = accounts;
+        this.releases = releases;
     }
 
     /**
@@ -49,6 +58,10 @@ public class InstagramAccountService {
             return false;
         }
         Instant now = Instant.now();
+        // TAKING IT BACK CLEARS THE MARK. A machine catching up acts on released accounts, so a re-add left
+        // marked would be quietly undone by the next catch-up — the customer adds an account and watches it
+        // disappear, with the cloud and the machine each doing exactly what they were told.
+        releases.deleteByUserIdAndIgHandle(userId, handle);
         InstagramAccount held = accounts.findByUserIdAndIgHandle(userId, handle).orElse(null);
         if (held != null) {
             held.seen(deviceId, now);
@@ -67,7 +80,34 @@ public class InstagramAccountService {
     @Transactional
     public boolean release(UUID userId, String igHandle) {
         String handle = normalise(igHandle);
-        return !handle.isEmpty() && accounts.deleteByUserIdAndIgHandle(userId, handle) > 0L;
+        if (handle.isEmpty()) {
+            return false;
+        }
+        boolean held = accounts.deleteByUserIdAndIgHandle(userId, handle) > 0L;
+        /*
+         * THE MARK IS LEFT EVEN WHEN NOTHING WAS HELD, and that is deliberate. An account can be one this
+         * cloud was never told about — claimed while it was unreachable, or predating the claim entirely —
+         * and the customer removing it from the Seat Map has still DECIDED. A machine holding that account
+         * needs to hear about the decision, not about whether we happened to have a row for it.
+         */
+        Instant now = Instant.now();
+        releases.findByUserIdAndIgHandle(userId, handle)
+                .ifPresentOrElse(mark -> mark.releasedAt(now),
+                        () -> releases.save(InstagramAccountRelease.of(userId, handle, now)));
+        return held;
+    }
+
+    /**
+     * Everything this customer has released and not re-claimed — what a machine must undo.
+     *
+     * <p>A client cannot derive this by comparing what it holds against {@link #heldBy}: a handle missing
+     * from there might have been released and might equally be one this service has never been told about.
+     * Absent is not released, which is the rule the marks exist to enforce; this is the same rule pointing
+     * the other way.
+     */
+    @Transactional(readOnly = true)
+    public List<InstagramAccountRelease> releasedBy(UUID userId) {
+        return releases.findByUserIdOrderByReleasedAtAsc(userId);
     }
 
     /** Everything this customer has claimed, oldest first — a stable order, so two readers agree. */

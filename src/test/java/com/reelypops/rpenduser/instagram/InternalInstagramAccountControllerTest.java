@@ -61,6 +61,95 @@ class InternalInstagramAccountControllerTest {
         return mockMvc.perform(get(PATH, user).header(KEY_HEADER, KEY));
     }
 
+    private ResultActions released(UUID user) throws Exception {
+        return mockMvc.perform(get(PATH + "/released", user).header(KEY_HEADER, KEY));
+    }
+
+    // ── what a machine must undo ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * <strong>A RELEASE LEAVES A MARK, BECAUSE A DELETED ROW SAYS NOTHING.</strong>
+     *
+     * <p>Removing an account from the Seat Map freed the slot here while the account carried on existing on
+     * the computer it was set up on, and nothing anywhere could reconcile the two.
+     */
+    @Test
+    void aReleasedAccountIsSomethingAMachineCanReadBack() throws Exception {
+        UUID user = UUID.randomUUID();
+        claim(user, "jean_marc.lestudio", "mac-1").andExpect(status().isCreated());
+
+        release(user, "jean_marc.lestudio").andExpect(status().isNoContent());
+
+        released(user).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].igHandle").value("jean_marc.lestudio"))
+                .andExpect(jsonPath("$[0].releasedAt").isNotEmpty());
+    }
+
+    /**
+     * <strong>THE MARK IS LEFT EVEN WHEN NOTHING WAS HELD.</strong> An account can be one this cloud was
+     * never told about — claimed while it was unreachable, or predating the claim entirely — and the customer
+     * removing it has still DECIDED. A machine holding it needs to hear about the decision, not about
+     * whether we happened to have a row.
+     */
+    @Test
+    void releasingSomethingNeverClaimedStillRecordsTheDecision() throws Exception {
+        UUID user = UUID.randomUUID();
+
+        release(user, "never.claimed.here").andExpect(status().isNoContent());
+
+        released(user).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].igHandle").value("never.claimed.here"));
+    }
+
+    /**
+     * <strong>TAKING IT BACK CLEARS THE MARK.</strong> A machine acts on released accounts, so a re-add left
+     * marked would be quietly undone by the next catch-up: the customer adds an account and watches it
+     * disappear, with the cloud and the machine each doing exactly what they were told.
+     */
+    @Test
+    void reClaimingAnAccountStopsTheMachinesUndoingIt() throws Exception {
+        UUID user = UUID.randomUUID();
+        claim(user, "jean_marc.lestudio", "mac-1").andExpect(status().isCreated());
+        release(user, "jean_marc.lestudio").andExpect(status().isNoContent());
+
+        claim(user, "jean_marc.lestudio", "mac-1").andExpect(status().isCreated());
+
+        released(user).andExpect(jsonPath("$.length()").value(0));
+        held(user).andExpect(jsonPath("$.length()").value(1));
+    }
+
+    /** Handles are normalised on this path too: a mark under one spelling undoes the wrong account. */
+    @Test
+    void theMarkIsKeptUnderTheNormalisedHandle() throws Exception {
+        UUID user = UUID.randomUUID();
+
+        release(user, "@Jean_Marc").andExpect(status().isNoContent());
+
+        released(user).andExpect(jsonPath("$[0].igHandle").value("jean_marc"));
+    }
+
+    /** One customer's decisions are not another's. */
+    @Test
+    void aCustomerOnlySeesTheirOwnReleases() throws Exception {
+        UUID mine = UUID.randomUUID();
+        UUID theirs = UUID.randomUUID();
+        release(mine, "mine").andExpect(status().isNoContent());
+
+        released(theirs).andExpect(jsonPath("$.length()").value(0));
+    }
+
+    /** Releasing twice keeps ONE mark — a standing decision, not a history. */
+    @Test
+    void releasingTwiceLeavesOneMark() throws Exception {
+        UUID user = UUID.randomUUID();
+
+        release(user, "twice").andExpect(status().isNoContent());
+        release(user, "twice").andExpect(status().isNoContent());
+
+        released(user).andExpect(jsonPath("$.length()").value(1));
+    }
+
     @Test
     void takesAnAccountOnAndCountsIt() throws Exception {
         UUID user = UUID.randomUUID();
