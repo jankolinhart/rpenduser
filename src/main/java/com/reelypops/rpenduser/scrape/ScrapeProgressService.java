@@ -24,11 +24,18 @@ import java.util.UUID;
 public class ScrapeProgressService {
 
     /**
-     * The states a machine may report. <strong>IDLE is deliberately not among them</strong>: idleness is the
-     * absent row, and a machine that wanted to say "I am doing nothing" would be making a claim this table
-     * cannot keep true — the moment it closes, the row would still say idle.
+     * The states a machine may report.
+     *
+     * <p>STOPPED is its own ending and not a flavour of the others: the operator asked, and it stopped. It is
+     * not DONE (the grid was never reached), not FAILED (nothing broke), and not REFUSED (it did start) — and
+     * an operator who cannot tell "I stopped it" from "it crashed" soon stops reading the column at all.</p>
+     *
+     * <p><strong>IDLE is deliberately not among them</strong>: idleness is the absent row, and a machine that
+     * wanted to say "I am doing nothing" would be making a claim this table cannot keep true — the moment it
+     * closes, the row would still say idle.
      */
-    static final Set<String> STATES = Set.of("REQUESTED", "DELIVERED", "RUNNING", "DONE", "FAILED", "REFUSED");
+    static final Set<String> STATES =
+            Set.of("REQUESTED", "DELIVERED", "RUNNING", "DONE", "FAILED", "REFUSED", "STOPPED");
 
     private final DeviceScrapeProgressRepository progress;
     private final DeviceRepository devices;

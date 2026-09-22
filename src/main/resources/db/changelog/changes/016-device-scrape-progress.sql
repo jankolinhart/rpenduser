@@ -43,8 +43,9 @@ COMMENT ON TABLE device_scrape_progress IS
     'What one machine is doing about one support group''s deep scrape. Current state, not history: the next '
     'scrape of that group on that machine overwrites the row. Absence means nothing is known, not idle.';
 COMMENT ON COLUMN device_scrape_progress.state IS
-    'REQUESTED (accepted for delivery), DELIVERED (the machine has it), RUNNING, DONE, FAILED or REFUSED '
-    '(the machine declined — typically it does not run this group). There is no IDLE: that is the absent row.';
+    'REQUESTED (accepted for delivery), DELIVERED (the machine has it), RUNNING, DONE, STOPPED (an operator '
+    'asked it to stop — its own ending, not a failure and not a completion), FAILED, or REFUSED (the machine '
+    'declined — typically it does not run this group). There is no IDLE: that is the absent row.';
 COMMENT ON COLUMN device_scrape_progress.scanned_count IS
     'Posts seen so far. There is no total to divide it by — a deep scrape walks until the grid ends — so this '
     'is a count that rises, never a percentage.';

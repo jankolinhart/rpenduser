@@ -189,6 +189,24 @@ class InternalScrapeProgressControllerTest {
         assertThat(ScrapeProgressService.STATES).doesNotContain("IDLE");
     }
 
+    /**
+     * STOPPED is its own ending: the operator asked, and it stopped. Not DONE — the grid was never reached —
+     * and emphatically not FAILED, because an operator who cannot tell "I stopped it" from "it crashed" soon
+     * stops reading the column at all.
+     */
+    @Test
+    void stoppingIsAnEndingOfItsOwn_neitherFinishedNorBroken() throws Exception {
+        UUID user = UUID.randomUUID();
+        String group = "grp" + UUID.randomUUID().toString().substring(0, 8);
+        registerDevice(user, "dev-a");
+
+        report(user, "dev-a", group, "STOPPED", 63).andExpect(status().isNoContent());
+
+        mockMvc.perform(get(READ, group).header(KEY_HEADER, KEY))
+                .andExpect(jsonPath("$[0].state").value("STOPPED"))
+                .andExpect(jsonPath("$[0].scannedCount").value(63));
+    }
+
     /** A group nothing has scraped is an empty list — the console says "no scrape reported", not an error. */
     @Test
     void aGroupNobodyHasScrapedIsEmpty_notAFailure() throws Exception {
